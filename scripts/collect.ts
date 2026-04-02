@@ -12,8 +12,9 @@
 import { sql, ensureSchema } from '../lib/db';
 import { fetchOpenMeteoSnowBatch } from '../lib/open-meteo';
 
-const BATCH_SIZE = 500;   // locations per Open-Meteo request
-const PAUSE_MS   = 2_000; // ms between requests
+const BATCH_SIZE    = 500;    // locations per Open-Meteo request
+const PAUSE_MS      = 10_000; // ms between requests (~6 req/min, well under free-tier cap)
+const RECOVERY_MS   = 30_000; // extra pause after a batch error before continuing
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -74,6 +75,8 @@ async function main() {
     } catch (e) {
       errors++;
       console.error(`[collect] batch ${i + 1} error:`, e);
+      console.log(`[collect] rate-limit recovery — waiting ${RECOVERY_MS / 1000}s before next batch`);
+      await sleep(RECOVERY_MS);
     }
   }
 

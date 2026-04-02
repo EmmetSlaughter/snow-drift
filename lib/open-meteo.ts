@@ -32,7 +32,7 @@ export async function fetchOpenMeteoSnowBatch(
   for (let attempt = 0; attempt < 3; attempt++) {
     res = await fetch(url);
     if (res.status !== 429) break;
-    const wait = (attempt + 1) * 5_000;
+    const wait = (attempt + 1) * 10_000;
     console.warn(`[open-meteo] 429 on attempt ${attempt + 1}, retrying in ${wait}ms`);
     await new Promise(r => setTimeout(r, wait));
   }
