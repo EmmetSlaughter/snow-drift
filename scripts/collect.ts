@@ -1,0 +1,88 @@
+#!/usr/bin/env tsx
+/**
+ * Hourly forecast collection script — executed by GitHub Actions.
+ *
+ * Fetches Open-Meteo snowfall for every grid location, stores non-zero
+ * rows in Neon, and prunes snapshots older than 14 days.
+ *
+ * Usage:  npm run collect
+ * Env:    DATABASE_URL  (required — set as a GitHub Actions secret)
+ */
+
+import { sql, ensureSchema } from '../lib/db';
+import { fetchOpenMeteoSnowBatch } from '../lib/open-meteo';
+
+const BATCH_SIZE = 500;   // locations per Open-Meteo request
+const PAUSE_MS   = 2_000; // ms between requests
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+async function main() {
+  console.log('[collect] start', new Date().toISOString());
+
+  await ensureSchema();
+
+  const locations = await sql`
+    SELECT id, lat, lon FROM locations ORDER BY id
+  ` as { id: number; lat: number; lon: number }[];
+
+  if (locations.length === 0) {
+    console.error('[collect] no locations — run /api/locations/seed first');
+    process.exit(1);
+  }
+
+  // Prune data older than 14 days
+  await sql`DELETE FROM forecast_snapshots WHERE fetched_at < NOW() - INTERVAL '14 days'`;
+
+  const fetchedAt = new Date().toISOString();
+
+  // Chunk into batches
+  const batches: typeof locations[] = [];
+  for (let i = 0; i < locations.length; i += BATCH_SIZE) {
+    batches.push(locations.slice(i, i + BATCH_SIZE));
+  }
+
+  console.log(`[collect] ${locations.length} locations → ${batches.length} batches`);
+
+  let totalRows = 0;
+  let errors    = 0;
+
+  for (let i = 0; i < batches.length; i++) {
+    if (i > 0) await sleep(PAUSE_MS);
+
+    try {
+      const rows = await fetchOpenMeteoSnowBatch(batches[i]);
+
+      if (rows.length > 0) {
+        const locationIds = rows.map(r => r.locationId);
+        const times       = rows.map(r => r.validTime.toISOString());
+        const cms         = rows.map(r => r.snowCm);
+
+        await sql`
+          INSERT INTO forecast_snapshots (fetched_at, location_id, source, valid_time, snow_cm)
+          SELECT
+            ${fetchedAt}::timestamptz,
+            unnest(${locationIds}::integer[]),
+            'open-meteo',
+            unnest(${times}::text[])::timestamptz,
+            unnest(${cms}::double precision[])
+        `;
+        totalRows += rows.length;
+      }
+
+      console.log(`[collect] batch ${i + 1}/${batches.length} — ${rows.length} non-zero rows`);
+    } catch (e) {
+      errors++;
+      console.error(`[collect] batch ${i + 1} error:`, e);
+    }
+  }
+
+  console.log(`[collect] done — ${totalRows} rows inserted, ${errors} batch errors`);
+
+  if (errors > 0) process.exit(1);
+}
+
+main().catch(e => {
+  console.error('[collect] fatal:', e);
+  process.exit(1);
+});

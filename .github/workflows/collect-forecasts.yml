@@ -1,0 +1,30 @@
+name: Collect Forecasts
+
+on:
+  schedule:
+    # Run at 10 minutes past every hour.
+    # Offset avoids the exact-hour congestion on GitHub's scheduler.
+    - cron: '10 * * * *'
+  workflow_dispatch: # allows manual trigger from the Actions tab
+
+jobs:
+  collect:
+    name: Fetch & store snowfall forecasts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run collection script
+        run: npm run collect
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
