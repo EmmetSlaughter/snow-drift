@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
 
   if (clear) {
     // Must delete snapshots first due to FK constraint, then locations.
-    await sql`TRUNCATE forecast_snapshots, locations RESTART IDENTITY`;
+    await sql`TRUNCATE forecast_snapshots, storms, locations RESTART IDENTITY`;
   }
 
   const points = generateUSGrid(step);
