@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Map, { Source, Layer, Popup } from 'react-map-gl/maplibre';
+import Map, { Source, Layer } from 'react-map-gl/maplibre';
 import type { FillLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
@@ -388,76 +388,78 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         <Source id="snow" type="geojson" data={geojson}>
           <Layer {...fillLayer} />
         </Source>
+      </Map>}
 
-        {popup && (
-          <Popup
-            longitude={popup.lon}
-            latitude={popup.lat}
-            anchor="bottom"
-            onClose={() => setPopup(null)}
-            closeOnClick={false}
-            maxWidth="320px"
-            className="snow-popup"
+      {/* Detail panel — floating card on the right */}
+      {popup && (
+        <div className="absolute top-4 right-4 bottom-4 w-80 bg-[#fffdf9]/95 backdrop-blur-md
+                        rounded-2xl shadow-lg border border-[#ece6da] text-[#4a4539] text-sm
+                        overflow-y-auto transition-all">
+          {/* Close button */}
+          <button
+            onClick={() => setPopup(null)}
+            className="absolute top-3 right-3 text-[#bbb5a8] hover:text-[#7a7568] text-lg leading-none z-10"
           >
-            <div className="bg-[#fffdf9] text-[#4a4539] rounded-[20px] p-5 text-sm min-w-[280px]">
+            ×
+          </button>
 
-              {/* Hero number */}
-              <div className="flex items-baseline gap-1.5 mb-1">
-                <span className="text-5xl font-black text-[#3b82f6] leading-none tabular-nums">
-                  {popup.snowIn.toFixed(1)}
-                </span>
-                <span className="text-2xl font-bold text-[#a5d8ff] leading-none">″</span>
-              </div>
-              <p className="text-[11px] text-[#bbb5a8] mb-4">
-                {popup.lat.toFixed(2)}°N · {Math.abs(popup.lon).toFixed(2)}°W
-              </p>
+          <div className="p-5">
+            {/* Hero number */}
+            <div className="flex items-baseline gap-1.5 mb-1">
+              <span className="text-5xl font-black text-[#3b82f6] leading-none tabular-nums">
+                {popup.snowIn.toFixed(1)}
+              </span>
+              <span className="text-2xl font-bold text-[#a5d8ff] leading-none">″</span>
+            </div>
+            <p className="text-[11px] text-[#bbb5a8] mb-4">
+              {popup.lat.toFixed(2)}°N · {Math.abs(popup.lon).toFixed(2)}°W
+            </p>
 
-              {/* Storm list */}
-              <div>
-                {popup.storms === null && (
-                  <p className="text-xs text-[#bbb5a8] animate-pulse">Looking for storms…</p>
-                )}
-                {popup.storms !== null && popup.storms.length === 0 && (
-                  <p className="text-xs text-[#bbb5a8]">No storms detected yet.</p>
-                )}
-                {popup.storms !== null && popup.storms.length > 0 && (
-                  <>
-                    <p className="text-[10px] text-[#bbb5a8] font-bold uppercase tracking-widest mb-2">
-                      Storms
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {popup.storms.map(storm => (
-                        <button
-                          key={storm.id}
-                          onClick={() => selectStorm(storm.id)}
-                          className={`text-xs font-bold rounded-full px-3.5 py-1.5 transition-all ${
-                            popup.selectedStormId === storm.id
-                              ? 'bg-[#12b886] text-white shadow-sm'
-                              : 'bg-[#f1ede8] text-[#9e9890] hover:bg-[#e8e2da]'
-                          }`}
-                        >
-                          {fmtStormLabel(storm)}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Drift chart */}
-              {popup.driftLoading && (
-                <p className="text-xs text-[#bbb5a8] mt-3 animate-pulse">Loading drift…</p>
+            {/* Storm list */}
+            <div>
+              {popup.storms === null && (
+                <p className="text-xs text-[#bbb5a8] animate-pulse">Looking for storms…</p>
               )}
-              {!popup.driftLoading && popup.hourly !== null && (
-                <HourlyChart hourly={popup.hourly} />
+              {popup.storms !== null && popup.storms.length === 0 && (
+                <p className="text-xs text-[#bbb5a8]">No storms detected yet.</p>
               )}
-              {!popup.driftLoading && popup.drift !== null && (
-                <DriftChart drift={popup.drift} />
+              {popup.storms !== null && popup.storms.length > 0 && (
+                <>
+                  <p className="text-[10px] text-[#bbb5a8] font-bold uppercase tracking-widest mb-2">
+                    Storms
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {popup.storms.map(storm => (
+                      <button
+                        key={storm.id}
+                        onClick={() => selectStorm(storm.id)}
+                        className={`text-xs font-bold rounded-full px-3.5 py-1.5 transition-all ${
+                          popup.selectedStormId === storm.id
+                            ? 'bg-[#12b886] text-white shadow-sm'
+                            : 'bg-[#f1ede8] text-[#9e9890] hover:bg-[#e8e2da]'
+                        }`}
+                      >
+                        {fmtStormLabel(storm)}
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
-          </Popup>
-        )}
-      </Map>}
+
+            {/* Charts */}
+            {popup.driftLoading && (
+              <p className="text-xs text-[#bbb5a8] mt-3 animate-pulse">Loading drift…</p>
+            )}
+            {!popup.driftLoading && popup.hourly !== null && (
+              <HourlyChart hourly={popup.hourly} />
+            )}
+            {!popup.driftLoading && popup.drift !== null && (
+              <DriftChart drift={popup.drift} />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Legend */}
       <div className="absolute bottom-8 left-4 bg-[#fffdf9]/90 backdrop-blur rounded-2xl px-4 py-3 pointer-events-none shadow-md border border-[#ece6da]">
@@ -474,7 +476,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       </div>
 
       {fetchedAt && (
-        <div className="absolute top-4 right-4 bg-[#fffdf9]/90 backdrop-blur rounded-xl px-3 py-2 text-xs text-[#bbb5a8] shadow-sm border border-[#ece6da]">
+        <div className="absolute bottom-8 left-44 bg-[#fffdf9]/90 backdrop-blur rounded-xl px-3 py-2 text-xs text-[#bbb5a8] shadow-sm border border-[#ece6da] pointer-events-none">
           {new Date(fetchedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
         </div>
       )}
