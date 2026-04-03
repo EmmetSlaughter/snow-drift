@@ -464,10 +464,13 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
 
       </Map>}
 
-      {/* Sidebar — always visible */}
-      <div className="absolute top-4 right-4 bottom-4 w-80 bg-[#fffdf9]/95 backdrop-blur-md
-                      rounded-2xl shadow-lg border border-[#ece6da] text-[#4a4539] text-sm
-                      overflow-y-auto flex flex-col">
+      {/* Sidebar — collapses when empty, expands smoothly when data loads */}
+      <div
+        className={`absolute top-4 right-4 bg-[#fffdf9]/95 backdrop-blur-md
+                    rounded-2xl shadow-lg border border-[#ece6da] text-[#4a4539] text-sm
+                    flex flex-col transition-all duration-500 ease-in-out overflow-hidden
+                    ${popup ? 'bottom-4 w-80' : 'w-72'}`}
+      >
         {/* Search bar */}
         <div className="p-4 pb-2 flex-none">
           <div className="relative flex gap-2">
@@ -520,11 +523,11 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         </div>
 
         {/* Content area */}
-        <div className="flex-1 overflow-y-auto px-5 pb-5">
+        <div className={`overflow-y-auto px-5 pb-5 ${popup ? 'flex-1' : ''}`}>
           {!popup ? (
-            <div className="flex flex-col items-center justify-center h-full text-center">
+            <div className="text-center py-2">
               <p className="text-[#bbb5a8] text-xs">
-                Search or click the map<br />to explore snowfall
+                Search or click the map to explore
               </p>
             </div>
           ) : (
