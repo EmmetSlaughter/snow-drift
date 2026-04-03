@@ -128,10 +128,12 @@ export async function collectNWSForSnowyLocations(
     nws_office: string | null; nws_grid_x: number | null; nws_grid_y: number | null;
   }[];
 
-  const needsMeta = locs.filter(l => l.nws_office === null);
+  const MAX_META_PER_RUN = 100; // spread metadata population across multiple hourly runs
+  const allNeedsMeta = locs.filter(l => l.nws_office === null);
+  const needsMeta    = allNeedsMeta.slice(0, MAX_META_PER_RUN);
 
   if (needsMeta.length > 0) {
-    console.log(`[nws] looking up grid metadata for ${needsMeta.length} new locations…`);
+    console.log(`[nws] looking up grid metadata for ${needsMeta.length} locations (${allNeedsMeta.length - needsMeta.length} deferred to future runs)…`);
 
     for (let i = 0; i < needsMeta.length; i += CONCURRENT) {
       if (i > 0) await sleep(PAUSE_MS);
