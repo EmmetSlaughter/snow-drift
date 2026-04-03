@@ -76,4 +76,10 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_storms_location
     ON storms (location_id, window_start)
   `;
+
+  // NWS grid metadata — populated lazily on first snowy collect run per location.
+  // nws_office = 'NONE' means the location has no NWS coverage (ocean, border edge, etc.)
+  await sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS nws_office  VARCHAR(10)`;
+  await sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS nws_grid_x  INTEGER`;
+  await sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS nws_grid_y  INTEGER`;
 }

@@ -11,6 +11,7 @@
 
 import { sql, ensureSchema } from '../lib/db';
 import { fetchOpenMeteoSnowBatch } from '../lib/open-meteo';
+import { collectNWSForSnowyLocations } from '../lib/nws';
 import { detectStormsAfterCollect } from '../lib/detect-storms';
 
 const BATCH_SIZE    = 500;    // locations per Open-Meteo request
@@ -48,6 +49,7 @@ async function main() {
 
   let totalRows = 0;
   let errors    = 0;
+  const snowyLocationIds = new Set<number>();
 
   for (let i = 0; i < batches.length; i++) {
     if (i > 0) await sleep(PAUSE_MS);
@@ -70,6 +72,7 @@ async function main() {
             unnest(${cms}::double precision[])
         `;
         totalRows += rows.length;
+        for (const r of rows) snowyLocationIds.add(r.locationId);
       }
 
       console.log(`[collect] batch ${i + 1}/${batches.length} — ${rows.length} non-zero rows`);
@@ -81,7 +84,12 @@ async function main() {
     }
   }
 
-  console.log(`[collect] done — ${totalRows} rows inserted, ${errors} batch errors`);
+  console.log(`[collect] open-meteo done — ${totalRows} rows, ${errors} batch errors, ${snowyLocationIds.size} snowy locations`);
+
+  if (snowyLocationIds.size > 0) {
+    const nwsRows = await collectNWSForSnowyLocations([...snowyLocationIds], fetchedAt);
+    console.log(`[collect] nws — ${nwsRows} rows inserted`);
+  }
 
   if (totalRows > 0) {
     const storms = await detectStormsAfterCollect(fetchedAt);
