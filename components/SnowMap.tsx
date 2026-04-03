@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Map, { Source, Layer, Popup } from 'react-map-gl/maplibre';
 import type { CircleLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -148,6 +148,32 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
   const mapTilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '';
   const [popup, setPopup] = useState<PopupState | null>(null);
 
+  // Fetch the base style and patch colors to match our warm palette.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [mapStyle, setMapStyle] = useState<any>(null);
+  useEffect(() => {
+    fetch(`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`)
+      .then(r => r.json())
+      .then(style => {
+        for (const layer of style.layers) {
+          const paint = layer.paint ?? {};
+          // Water → warm pale gray
+          if (layer.id.includes('water') && paint['fill-color']) {
+            layer.paint['fill-color'] = '#e8e4dd';
+          }
+          // Land / background → warm off-white
+          if (layer.type === 'background' && paint['background-color']) {
+            layer.paint['background-color'] = '#faf7f2';
+          }
+        }
+        setMapStyle(style);
+      })
+      .catch(() => {
+        // Fallback to raw URL if fetch fails
+        setMapStyle(`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`);
+      });
+  }, [mapTilerKey]);
+
   const geojson = useMemo(() => ({
     type: 'FeatureCollection' as const,
     features: points.map(p => ({
@@ -259,10 +285,15 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
 
   return (
     <div className="relative w-full h-full">
-      <Map
+      {!mapStyle ? (
+        <div className="w-full h-full flex items-center justify-center bg-[#faf7f2] text-[#bbb5a8] text-sm">
+          Loading map…
+        </div>
+      ) : null}
+      {mapStyle && <Map
         initialViewState={{ longitude: -96, latitude: 38.5, zoom: 3.8 }}
         style={{ width: '100%', height: '100%' }}
-        mapStyle={`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`}
+        mapStyle={mapStyle}
         interactiveLayerIds={['snow-circles']}
         onClick={onClick}
         cursor="auto"
@@ -336,7 +367,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
             </div>
           </Popup>
         )}
-      </Map>
+      </Map>}
 
       {/* Legend */}
       <div className="absolute bottom-8 left-4 bg-[#fffdf9]/90 backdrop-blur rounded-2xl px-4 py-3 text-xs text-[#7a7568] space-y-1.5 pointer-events-none shadow-md border border-[#ece6da]">
