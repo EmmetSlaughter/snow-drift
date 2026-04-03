@@ -217,53 +217,28 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
   // Fetch the base style and patch colors to match our warm palette.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [mapStyle, setMapStyle] = useState<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [usMask, setUsMask] = useState<any>(null);
-
   useEffect(() => {
-    // Load map style + US boundary in parallel
-    Promise.all([
-      fetch(`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`).then(r => r.json()),
-      fetch('/us-boundary.json').then(r => r.json()),
-    ]).then(([style, boundary]) => {
-      // Patch style colors
-      for (const layer of style.layers) {
-        if (!layer.paint) continue;
-        const id = layer.id.toLowerCase();
-        if (id.includes('water') && layer.paint['fill-color']) {
-          layer.paint['fill-color'] = '#e8e4dd';
+    fetch(`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`)
+      .then(r => r.json())
+      .then(style => {
+        for (const layer of style.layers) {
+          if (!layer.paint) continue;
+          const id = layer.id.toLowerCase();
+          if (id.includes('water') && layer.paint['fill-color']) {
+            layer.paint['fill-color'] = '#e8e4dd';
+          }
+          if (layer.type === 'background' && layer.paint['background-color']) {
+            layer.paint['background-color'] = '#faf7f2';
+          }
+          if (layer.type === 'fill' && (id.includes('land') || id.includes('earth') || id.includes('park'))) {
+            if (layer.paint['fill-color']) layer.paint['fill-color'] = '#faf7f2';
+          }
         }
-        if (layer.type === 'background' && layer.paint['background-color']) {
-          layer.paint['background-color'] = '#faf7f2';
-        }
-        if (layer.type === 'fill' && (id.includes('land') || id.includes('earth') || id.includes('park'))) {
-          if (layer.paint['fill-color']) layer.paint['fill-color'] = '#faf7f2';
-        }
-      }
-      setMapStyle(style);
-
-      // Build mask: world polygon with US boundary as holes
-      const worldOuter = [[-180, -90], [180, -90], [180, 90], [-180, 90], [-180, -90]];
-      const feature = boundary.features[0];
-      const holes: number[][][] = [];
-      if (feature.geometry.type === 'MultiPolygon') {
-        for (const poly of feature.geometry.coordinates) {
-          holes.push(poly[0]); // outer ring of each polygon part
-        }
-      } else {
-        holes.push(feature.geometry.coordinates[0]);
-      }
-      setUsMask({
-        type: 'FeatureCollection',
-        features: [{
-          type: 'Feature',
-          geometry: { type: 'Polygon', coordinates: [worldOuter, ...holes] },
-          properties: {},
-        }],
+        setMapStyle(style);
+      })
+      .catch(() => {
+        setMapStyle(`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`);
       });
-    }).catch(() => {
-      setMapStyle(`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`);
-    });
   }, [mapTilerKey]);
 
   const GRID_STEP = 0.5;
@@ -403,21 +378,12 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         interactiveLayerIds={['snow-fill']}
         onClick={onClick}
         cursor="auto"
+        maxBounds={[[-135, 22], [-60, 52]]}
       >
         <Source id="snow" type="geojson" data={geojson}>
           <Layer {...fillLayer} />
         </Source>
 
-        {usMask && (
-          <Source id="us-mask" type="geojson" data={usMask}>
-            <Layer
-              id="us-mask-fill"
-              type="fill"
-              source="us-mask"
-              paint={{ 'fill-color': '#faf7f2', 'fill-opacity': 1 }}
-            />
-          </Source>
-        )}
       </Map>}
 
       {/* Detail panel — floating card on the right */}
