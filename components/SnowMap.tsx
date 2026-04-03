@@ -262,7 +262,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       <Map
         initialViewState={{ longitude: -96, latitude: 38.5, zoom: 3.8 }}
         style={{ width: '100%', height: '100%' }}
-        mapStyle={`https://api.maptiler.com/maps/pastel/style.json?key=${mapTilerKey}`}
+        mapStyle={`https://api.maptiler.com/maps/backdrop/style.json?key=${mapTilerKey}`}
         interactiveLayerIds={['snow-circles']}
         onClick={onClick}
         cursor="auto"
