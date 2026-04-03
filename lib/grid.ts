@@ -9,7 +9,7 @@ export interface GridPoint {
 }
 
 const LAT_MIN =  24.5;
-const LAT_MAX =  49.5;
+const LAT_MAX =  49.0;
 const LON_MIN = -125.0;
 const LON_MAX =  -66.5;
 
