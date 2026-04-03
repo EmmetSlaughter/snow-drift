@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Map, { Source, Layer, Popup } from 'react-map-gl/maplibre';
-import type { CircleLayer, HeatmapLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
+import type { FillLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -181,68 +181,44 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       });
   }, [mapTilerKey]);
 
+  const GRID_STEP = 0.5;
+  const HALF = GRID_STEP / 2;
+
   const geojson = useMemo(() => ({
     type: 'FeatureCollection' as const,
     features: points.map(p => ({
       type: 'Feature' as const,
-      geometry: { type: 'Point' as const, coordinates: [p.lon, p.lat] },
-      properties: { locationId: p.locationId, snowIn: p.snowIn },
+      geometry: {
+        type: 'Polygon' as const,
+        coordinates: [[
+          [p.lon - HALF, p.lat - HALF],
+          [p.lon + HALF, p.lat - HALF],
+          [p.lon + HALF, p.lat + HALF],
+          [p.lon - HALF, p.lat + HALF],
+          [p.lon - HALF, p.lat - HALF],
+        ]],
+      },
+      properties: { locationId: p.locationId, snowIn: p.snowIn, lat: p.lat, lon: p.lon },
     })),
   }), [points]);
 
-  // Heatmap: the primary visualization — continuous weather-map field.
-  const heatmapLayer: HeatmapLayer = {
-    id: 'snow-heat',
-    type: 'heatmap',
+  // Filled grid cells with sharp color bands — TV snow forecast style.
+  const fillLayer: FillLayer = {
+    id: 'snow-fill',
+    type: 'fill',
     source: 'snow',
     paint: {
-      'heatmap-weight': [
-        'interpolate', ['linear'], ['get', 'snowIn'],
-        0, 0,
-        3, 0.4,
-        6, 0.6,
-        12, 0.8,
-        24, 1,
+      'fill-color': [
+        'step', ['get', 'snowIn'],
+        '#bde0fe',      // trace – 1″
+        1,  '#74b9ff',  // 1 – 3″
+        3,  '#3a86ff',  // 3 – 6″
+        6,  '#1e3a8a',  // 6 – 12″
+        12, '#6741d9',  // 12 – 24″
+        24, '#9c36b5',  // 24″+
       ],
-      'heatmap-intensity': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 1.2,
-        6, 2,
-        9, 3,
-        12, 4,
-      ],
-      'heatmap-color': [
-        'interpolate', ['linear'], ['heatmap-density'],
-        0,    'rgba(0,0,0,0)',
-        0.1,  'rgba(165,216,255,0.4)',
-        0.25, 'rgba(116,192,252,0.6)',
-        0.4,  'rgba(77,171,247,0.7)',
-        0.6,  'rgba(59,130,246,0.8)',
-        0.8,  'rgba(103,65,217,0.85)',
-        1.0,  'rgba(156,54,181,0.9)',
-      ],
-      'heatmap-radius': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 25,
-        5, 40,
-        7, 60,
-        9, 80,
-        11, 100,
-      ],
-      'heatmap-opacity': 0.9,
-    },
-  };
-
-  // Circles: invisible click targets only — the heatmap is the visual layer.
-  const circleLayer: CircleLayer = {
-    id: 'snow-circles',
-    type: 'circle',
-    source: 'snow',
-    paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 8, 6, 12, 9, 20],
-      'circle-color': 'transparent',
-      'circle-opacity': 0,
-      'circle-stroke-width': 0,
+      'fill-opacity': 0.8,
+      'fill-antialias': false,
     },
   };
 
@@ -310,9 +286,10 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
 
   const onClick = useCallback((e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
-    if (!f || f.geometry.type !== 'Point') return;
-    const [lon, lat] = f.geometry.coordinates as [number, number];
-    const { locationId, snowIn } = f.properties as { locationId: number; snowIn: number };
+    if (!f) return;
+    const { locationId, snowIn, lat, lon } = f.properties as {
+      locationId: number; snowIn: number; lat: number; lon: number;
+    };
     setPopup({ lat, lon, locationId, snowIn, storms: null, selectedStormId: null, drift: null, driftLoading: false });
     fetchStormsForLocation(locationId);
   }, [fetchStormsForLocation]);
@@ -336,13 +313,12 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         initialViewState={{ longitude: -96, latitude: 38.5, zoom: 3.8 }}
         style={{ width: '100%', height: '100%' }}
         mapStyle={mapStyle}
-        interactiveLayerIds={['snow-circles']}
+        interactiveLayerIds={['snow-fill']}
         onClick={onClick}
         cursor="auto"
       >
         <Source id="snow" type="geojson" data={geojson}>
-          <Layer {...heatmapLayer} />
-          <Layer {...circleLayer} />
+          <Layer {...fillLayer} />
         </Source>
 
         {popup && (
