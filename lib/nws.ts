@@ -128,7 +128,7 @@ export async function collectNWSForSnowyLocations(
     nws_office: string | null; nws_grid_x: number | null; nws_grid_y: number | null;
   }[];
 
-  const MAX_META_PER_RUN = 300; // ~15s of lookups at 5 concurrent + 250ms pause
+  const MAX_META_PER_RUN = 150; // balance coverage speed vs job timeout
   const allNeedsMeta = locs.filter(l => l.nws_office === null);
   const needsMeta    = allNeedsMeta.slice(0, MAX_META_PER_RUN);
 
