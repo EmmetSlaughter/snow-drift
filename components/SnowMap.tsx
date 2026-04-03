@@ -5,7 +5,7 @@ import Map, { Source, Layer, Popup } from 'react-map-gl/maplibre';
 import type { FillLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from 'recharts';
 
@@ -35,6 +35,7 @@ interface PopupState {
   storms: Storm[] | null;
   selectedStormId: number | null;
   drift: DriftSeries[] | null;
+  hourly: Record<string, string | number>[] | null;
   driftLoading: boolean;
 }
 
@@ -137,6 +138,71 @@ function DriftChart({ drift }: { drift: DriftSeries[] }) {
   );
 }
 
+function HourlyChart({ hourly }: { hourly: Record<string, string | number>[] }) {
+  if (!hourly.length) {
+    return <p className="text-xs text-[#bbb5a8] mt-2">No hourly data available.</p>;
+  }
+
+  // Determine which sources are present
+  const sources = new Set<string>();
+  for (const entry of hourly) {
+    for (const key of Object.keys(entry)) {
+      if (key !== 't') sources.add(key);
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <p className="text-[10px] text-[#bbb5a8] mb-1 font-bold uppercase tracking-widest">
+        Snowfall by hour
+      </p>
+      <ResponsiveContainer width="100%" height={110}>
+        <BarChart data={hourly} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#ece6da" vertical={false} />
+          <XAxis
+            dataKey="t"
+            tickFormatter={(iso: string) => {
+              const d = new Date(iso);
+              return d.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true });
+            }}
+            tick={{ fontSize: 8, fill: '#bbb5a8' }}
+            minTickGap={30}
+          />
+          <YAxis unit='″' tick={{ fontSize: 9, fill: '#bbb5a8' }} />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: '#fffdf9',
+              border: '1px solid #ece6da',
+              borderRadius: 12,
+              fontSize: 11,
+              boxShadow: '0 4px 16px rgba(120,100,70,0.1)',
+            }}
+            labelFormatter={(iso: string) =>
+              new Date(iso).toLocaleDateString('en-US', {
+                month: 'short', day: 'numeric',
+                hour: 'numeric', hour12: true,
+              })
+            }
+            formatter={(v: number, name: string) => [
+              `${v.toFixed(2)}″`,
+              SOURCE_LABEL[name] ?? name,
+            ]}
+          />
+          {[...sources].map(src => (
+            <Bar
+              key={src}
+              dataKey={src}
+              fill={SOURCE_COLOR[src] ?? '#8884d8'}
+              opacity={0.85}
+              radius={[2, 2, 0, 0]}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 interface SnowMapProps {
@@ -231,6 +297,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       const res    = await fetch(`/api/forecasts?locationId=${locationId}&stormId=${stormId}`);
       const json   = await res.json();
       const series: DriftSeries[] = json.series ?? [];
+      const hourly: Record<string, string | number>[] = json.hourly ?? [];
       let latestSnowIn: number | undefined;
       if (series.length > 0) {
         const allPoints = series.flatMap(s => s.points);
@@ -244,13 +311,14 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         return {
           ...prev,
           drift: series,
+          hourly,
           driftLoading: false,
           ...(latestSnowIn !== undefined && { snowIn: latestSnowIn }),
         };
       });
     } catch {
       setPopup(prev => prev?.locationId === locationId
-        ? { ...prev, drift: [], driftLoading: false }
+        ? { ...prev, drift: [], hourly: [], driftLoading: false }
         : prev,
       );
     }
@@ -290,14 +358,14 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
     const { locationId, snowIn, lat, lon } = f.properties as {
       locationId: number; snowIn: number; lat: number; lon: number;
     };
-    setPopup({ lat, lon, locationId, snowIn, storms: null, selectedStormId: null, drift: null, driftLoading: false });
+    setPopup({ lat, lon, locationId, snowIn, storms: null, selectedStormId: null, drift: null, hourly: null, driftLoading: false });
     fetchStormsForLocation(locationId);
   }, [fetchStormsForLocation]);
 
   const selectStorm = useCallback((stormId: number) => {
     setPopup(prev => {
       if (!prev) return prev;
-      return { ...prev, selectedStormId: stormId, drift: null, driftLoading: true };
+      return { ...prev, selectedStormId: stormId, drift: null, hourly: null, driftLoading: true };
     });
     if (popup) fetchDrift(popup.locationId, stormId);
   }, [popup, fetchDrift]);
@@ -379,6 +447,9 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
               {/* Drift chart */}
               {popup.driftLoading && (
                 <p className="text-xs text-[#bbb5a8] mt-3 animate-pulse">Loading drift…</p>
+              )}
+              {!popup.driftLoading && popup.hourly !== null && (
+                <HourlyChart hourly={popup.hourly} />
               )}
               {!popup.driftLoading && popup.drift !== null && (
                 <DriftChart drift={popup.drift} />
