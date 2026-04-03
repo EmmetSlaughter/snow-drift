@@ -1,26 +1,17 @@
 /**
- * GET /api/map-data?start=<ISO>&end=<ISO>
+ * GET /api/map-data
  *
- * Returns all locations with non-zero predicted snowfall in the given window,
+ * Returns all locations with non-zero predicted snowfall in the next 7 days,
  * based on the most recent cron run. Used to render the map circles.
- *
- * Response:
- * {
- *   fetchedAt: string,       // timestamp of the most recent cron run
- *   points: [
- *     { locationId, lat, lon, snowIn }
- *   ]
- * }
  */
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const windowStart = searchParams.get('start') ?? new Date().toISOString();
-  const windowEnd   = searchParams.get('end')   ?? new Date(Date.now() + 48 * 3_600_000).toISOString();
+export async function GET() {
+  const windowStart = new Date().toISOString();
+  const windowEnd   = new Date(Date.now() + 7 * 24 * 3_600_000).toISOString();
 
   // Find the most recent fetch across all locations.
   const [latest] = await sql`

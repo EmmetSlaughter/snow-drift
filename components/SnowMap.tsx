@@ -128,12 +128,10 @@ function DriftChart({ drift }: { drift: DriftSeries[] }) {
 
 interface SnowMapProps {
   points: SnowPoint[];
-  windowStart: string;
-  windowEnd: string;
   fetchedAt: string | null;
 }
 
-export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapProps) {
+export function SnowMap({ points, fetchedAt }: SnowMapProps) {
   const mapTilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '';
   const [popup, setPopup] = useState<PopupState | null>(null);
 
