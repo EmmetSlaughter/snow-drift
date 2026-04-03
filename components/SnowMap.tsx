@@ -190,8 +190,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
     })),
   }), [points]);
 
-  // Heatmap: soft glow that shows storm systems at a glance.
-  // Fades as you zoom in, where circles take over.
+  // Heatmap: the primary visualization — continuous weather-map field.
   const heatmapLayer: HeatmapLayer = {
     id: 'snow-heat',
     type: 'heatmap',
@@ -200,58 +199,50 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       'heatmap-weight': [
         'interpolate', ['linear'], ['get', 'snowIn'],
         0, 0,
-        6, 0.5,
+        3, 0.4,
+        6, 0.6,
+        12, 0.8,
         24, 1,
       ],
       'heatmap-intensity': [
         'interpolate', ['linear'], ['zoom'],
-        3, 0.8,
-        7, 1.5,
-        10, 2,
+        3, 1.2,
+        6, 2,
+        9, 3,
+        12, 4,
       ],
       'heatmap-color': [
         'interpolate', ['linear'], ['heatmap-density'],
         0,    'rgba(0,0,0,0)',
-        0.15, 'rgba(165,216,255,0.3)',
-        0.3,  'rgba(116,192,252,0.5)',
-        0.5,  'rgba(77,171,247,0.6)',
-        0.7,  'rgba(59,130,246,0.7)',
-        0.85, 'rgba(103,65,217,0.75)',
-        1.0,  'rgba(156,54,181,0.8)',
+        0.1,  'rgba(165,216,255,0.4)',
+        0.25, 'rgba(116,192,252,0.6)',
+        0.4,  'rgba(77,171,247,0.7)',
+        0.6,  'rgba(59,130,246,0.8)',
+        0.8,  'rgba(103,65,217,0.85)',
+        1.0,  'rgba(156,54,181,0.9)',
       ],
       'heatmap-radius': [
         'interpolate', ['linear'], ['zoom'],
-        3, 18,
-        6, 28,
-        9, 40,
+        3, 25,
+        5, 40,
+        7, 60,
+        9, 80,
+        11, 100,
       ],
-      'heatmap-opacity': [
-        'interpolate', ['linear'], ['zoom'],
-        6, 0.9,
-        10, 0.3,
-      ],
+      'heatmap-opacity': 0.9,
     },
   };
 
-  // Circles: small at overview, growing on zoom-in. Always clickable.
+  // Circles: invisible click targets only — the heatmap is the visual layer.
   const circleLayer: CircleLayer = {
     id: 'snow-circles',
     type: 'circle',
     source: 'snow',
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 2.5, 6, 4, 9, 12],
-      'circle-color': [
-        'interpolate', ['linear'], ['get', 'snowIn'],
-         0.1, '#a5d8ff',
-         1,   '#74c0fc',
-         3,   '#4dabf7',
-         6,   '#3b82f6',
-        12,   '#6741d9',
-        24,   '#9c36b5',
-      ],
-      'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.5, 7, 0.7, 10, 0.9],
-      'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 3, 0.5, 9, 2],
-      'circle-stroke-color': 'rgba(255,255,255,0.7)',
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 8, 6, 12, 9, 20],
+      'circle-color': 'transparent',
+      'circle-opacity': 0,
+      'circle-stroke-width': 0,
     },
   };
 
@@ -422,21 +413,17 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       </Map>}
 
       {/* Legend */}
-      <div className="absolute bottom-8 left-4 bg-[#fffdf9]/90 backdrop-blur rounded-2xl px-4 py-3 text-xs text-[#7a7568] space-y-1.5 pointer-events-none shadow-md border border-[#ece6da]">
-        <p className="font-bold text-[#4a4539] mb-1.5 text-[11px] uppercase tracking-widest">Snow</p>
-        {[
-          ['#a5d8ff', 'Trace – 1″'],
-          ['#74c0fc', '1 – 3″'],
-          ['#4dabf7', '3 – 6″'],
-          ['#3b82f6', '6 – 12″'],
-          ['#6741d9', '12 – 24″'],
-          ['#9c36b5', '24″+'],
-        ].map(([color, label]) => (
-          <div key={label} className="flex items-center gap-2.5">
-            <span className="inline-block w-3.5 h-3.5 rounded-full" style={{ backgroundColor: color }} />
-            {label}
-          </div>
-        ))}
+      <div className="absolute bottom-8 left-4 bg-[#fffdf9]/90 backdrop-blur rounded-2xl px-4 py-3 pointer-events-none shadow-md border border-[#ece6da]">
+        <p className="font-bold text-[#4a4539] mb-2 text-[11px] uppercase tracking-widest">Snow</p>
+        <div
+          className="h-3 w-36 rounded-full"
+          style={{ background: 'linear-gradient(to right, #a5d8ff, #74c0fc, #4dabf7, #3b82f6, #6741d9, #9c36b5)' }}
+        />
+        <div className="flex justify-between mt-1 text-[10px] text-[#9e9890]">
+          <span>Trace</span>
+          <span>6″</span>
+          <span>24″+</span>
+        </div>
       </div>
 
       {fetchedAt && (
