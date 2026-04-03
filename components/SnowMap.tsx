@@ -32,17 +32,22 @@ interface PopupState {
   lon: number;
   locationId: number;
   snowIn: number;
-  storms: Storm[] | null;       // null = loading
+  storms: Storm[] | null;
   selectedStormId: number | null;
-  drift: DriftSeries[] | null;  // null = not yet loaded
+  drift: DriftSeries[] | null;
   driftLoading: boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const SOURCE_COLOR: Record<string, string> = {
-  'open-meteo': '#f97316',
-  'nws':        '#3b82f6',
+  'open-meteo': '#f76707',
+  'nws':        '#12b886',
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  'open-meteo': 'Open-Meteo',
+  'nws':        'NWS',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -67,7 +72,7 @@ function fmtTick(iso: string): string {
 
 function DriftChart({ drift }: { drift: DriftSeries[] }) {
   if (!drift.length) {
-    return <p className="text-xs text-slate-400 mt-2">No drift history yet — check back after a few more hourly polls.</p>;
+    return <p className="text-xs text-[#bbb5a8] mt-2">No drift history yet — check back after a few polls.</p>;
   }
 
   const timeSet = new Set<string>();
@@ -85,18 +90,27 @@ function DriftChart({ drift }: { drift: DriftSeries[] }) {
 
   return (
     <div className="mt-3">
-      <p className="text-[10px] text-slate-400 mb-1 font-bold uppercase tracking-widest">
+      <p className="text-[10px] text-[#bbb5a8] mb-1 font-bold uppercase tracking-widest">
         Forecast drift
       </p>
       <ResponsiveContainer width="100%" height={130}>
         <LineChart data={data} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-          <XAxis dataKey="t" tickFormatter={fmtTick} tick={{ fontSize: 9, fill: '#94a3b8' }} minTickGap={60} />
-          <YAxis unit='″' tick={{ fontSize: 9, fill: '#94a3b8' }} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#ece6da" />
+          <XAxis dataKey="t" tickFormatter={fmtTick} tick={{ fontSize: 9, fill: '#bbb5a8' }} minTickGap={60} />
+          <YAxis unit='″' tick={{ fontSize: 9, fill: '#bbb5a8' }} />
           <Tooltip
-            contentStyle={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 11, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+            contentStyle={{
+              backgroundColor: '#fffdf9',
+              border: '1px solid #ece6da',
+              borderRadius: 12,
+              fontSize: 11,
+              boxShadow: '0 4px 16px rgba(120,100,70,0.1)',
+            }}
             labelFormatter={fmtTick}
-            formatter={(v: number, name: string) => [`${v.toFixed(1)}″`, name]}
+            formatter={(v: number, name: string) => [
+              `${v.toFixed(1)}″`,
+              SOURCE_LABEL[name] ?? name,
+            ]}
           />
           {drift.map(s => (
             <Line
@@ -104,19 +118,18 @@ function DriftChart({ drift }: { drift: DriftSeries[] }) {
               type="monotone"
               dataKey={s.source}
               stroke={SOURCE_COLOR[s.source] ?? '#8884d8'}
-              strokeWidth={2}
+              strokeWidth={2.5}
               dot={false}
               connectNulls
             />
           ))}
         </LineChart>
       </ResponsiveContainer>
-      {/* Source legend */}
-      <div className="flex gap-3 mt-1">
+      <div className="flex gap-3 mt-1.5">
         {drift.map(s => (
-          <div key={s.source} className="flex items-center gap-1">
-            <span className="inline-block w-3 h-0.5 rounded" style={{ backgroundColor: SOURCE_COLOR[s.source] ?? '#8884d8' }} />
-            <span className="text-[10px] text-slate-400">{s.source}</span>
+          <div key={s.source} className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-1 rounded-full" style={{ backgroundColor: SOURCE_COLOR[s.source] ?? '#8884d8' }} />
+            <span className="text-[10px] text-[#9e9890]">{SOURCE_LABEL[s.source] ?? s.source}</span>
           </div>
         ))}
       </div>
@@ -149,19 +162,19 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
     type: 'circle',
     source: 'snow',
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 5, 6, 9, 9, 15],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 5, 6, 10, 9, 16],
       'circle-color': [
         'interpolate', ['linear'], ['get', 'snowIn'],
-         0.1, '#93c5fd',
-         1,   '#3b82f6',
-         3,   '#1d4ed8',
-         6,   '#1e3a8a',
-        12,   '#4c1d95',
-        24,   '#7c3aed',
+         0.1, '#a5d8ff',
+         1,   '#74c0fc',
+         3,   '#4dabf7',
+         6,   '#3b82f6',
+        12,   '#6741d9',
+        24,   '#9c36b5',
       ],
-      'circle-opacity': 0.9,
-      'circle-stroke-width': 1.5,
-      'circle-stroke-color': 'rgba(255,255,255,0.6)',
+      'circle-opacity': 0.85,
+      'circle-stroke-width': 2,
+      'circle-stroke-color': 'rgba(255,255,255,0.7)',
     },
   };
 
@@ -174,7 +187,6 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       const res    = await fetch(`/api/forecasts?locationId=${locationId}&stormId=${stormId}`);
       const json   = await res.json();
       const series: DriftSeries[] = json.series ?? [];
-      // Derive the latest forecast value from the most-recent fetched point across all sources.
       let latestSnowIn: number | undefined;
       if (series.length > 0) {
         const allPoints = series.flatMap(s => s.points);
@@ -210,14 +222,13 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         if (prev?.locationId !== locationId) return prev;
         const updated = { ...prev, storms };
         if (storms.length > 0) {
-          const selected = storms[storms.length - 1]; // last = most recent window
+          const selected = storms[storms.length - 1];
           updated.selectedStormId = selected.id;
           return updated;
         }
         return updated;
       });
 
-      // Kick off drift fetch for the auto-selected storm.
       if (storms.length > 0) {
         fetchDrift(locationId, storms[storms.length - 1].id);
       }
@@ -251,7 +262,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       <Map
         initialViewState={{ longitude: -96, latitude: 38.5, zoom: 3.8 }}
         style={{ width: '100%', height: '100%' }}
-        mapStyle={`https://api.maptiler.com/maps/dataviz/style.json?key=${mapTilerKey}`}
+        mapStyle={`https://api.maptiler.com/maps/pastel/style.json?key=${mapTilerKey}`}
         interactiveLayerIds={['snow-circles']}
         onClick={onClick}
         cursor="auto"
@@ -270,42 +281,41 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
             maxWidth="320px"
             className="snow-popup"
           >
-            <div className="bg-white text-slate-900 rounded-2xl p-4 text-sm min-w-[280px]">
+            <div className="bg-[#fffdf9] text-[#4a4539] rounded-[20px] p-5 text-sm min-w-[280px]">
 
               {/* Hero number */}
-              <div className="flex items-baseline gap-1.5 mb-0.5">
-                <span className="text-4xl font-black text-blue-500 leading-none tabular-nums">
+              <div className="flex items-baseline gap-1.5 mb-1">
+                <span className="text-5xl font-black text-[#3b82f6] leading-none tabular-nums">
                   {popup.snowIn.toFixed(1)}
                 </span>
-                <span className="text-2xl font-bold text-blue-300 leading-none">″</span>
-                <span className="text-slate-400 text-xs ml-1">predicted</span>
+                <span className="text-2xl font-bold text-[#a5d8ff] leading-none">″</span>
               </div>
-              <p className="text-[11px] text-slate-400 mb-3">
+              <p className="text-[11px] text-[#bbb5a8] mb-4">
                 {popup.lat.toFixed(2)}°N · {Math.abs(popup.lon).toFixed(2)}°W
               </p>
 
               {/* Storm list */}
               <div>
                 {popup.storms === null && (
-                  <p className="text-xs text-slate-400 animate-pulse">Loading storms…</p>
+                  <p className="text-xs text-[#bbb5a8] animate-pulse">Looking for storms…</p>
                 )}
                 {popup.storms !== null && popup.storms.length === 0 && (
-                  <p className="text-xs text-slate-400">No storms detected yet.</p>
+                  <p className="text-xs text-[#bbb5a8]">No storms detected yet.</p>
                 )}
                 {popup.storms !== null && popup.storms.length > 0 && (
                   <>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1.5">
+                    <p className="text-[10px] text-[#bbb5a8] font-bold uppercase tracking-widest mb-2">
                       Storms
                     </p>
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-2">
                       {popup.storms.map(storm => (
                         <button
                           key={storm.id}
                           onClick={() => selectStorm(storm.id)}
-                          className={`text-xs font-semibold rounded-full px-3 py-1 transition-colors ${
+                          className={`text-xs font-bold rounded-full px-3.5 py-1.5 transition-all ${
                             popup.selectedStormId === storm.id
-                              ? 'bg-blue-500 text-white shadow-sm'
-                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                              ? 'bg-[#12b886] text-white shadow-sm'
+                              : 'bg-[#f1ede8] text-[#9e9890] hover:bg-[#e8e2da]'
                           }`}
                         >
                           {fmtStormLabel(storm)}
@@ -318,7 +328,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
 
               {/* Drift chart */}
               {popup.driftLoading && (
-                <p className="text-xs text-slate-400 mt-3 animate-pulse">Loading drift history…</p>
+                <p className="text-xs text-[#bbb5a8] mt-3 animate-pulse">Loading drift…</p>
               )}
               {!popup.driftLoading && popup.drift !== null && (
                 <DriftChart drift={popup.drift} />
@@ -329,26 +339,26 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       </Map>
 
       {/* Legend */}
-      <div className="absolute bottom-8 left-4 bg-white/90 backdrop-blur rounded-xl px-3 py-2.5 text-xs text-slate-600 space-y-1.5 pointer-events-none shadow-md border border-slate-100">
-        <p className="font-bold text-slate-700 mb-1 text-[11px] uppercase tracking-widest">Predicted snow</p>
+      <div className="absolute bottom-8 left-4 bg-[#fffdf9]/90 backdrop-blur rounded-2xl px-4 py-3 text-xs text-[#7a7568] space-y-1.5 pointer-events-none shadow-md border border-[#ece6da]">
+        <p className="font-bold text-[#4a4539] mb-1.5 text-[11px] uppercase tracking-widest">Snow</p>
         {[
-          ['#93c5fd', 'Trace – 1″'],
-          ['#3b82f6', '1 – 3″'],
-          ['#1d4ed8', '3 – 6″'],
-          ['#1e3a8a', '6 – 12″'],
-          ['#4c1d95', '12 – 24″'],
-          ['#7c3aed', '24″+'],
+          ['#a5d8ff', 'Trace – 1″'],
+          ['#74c0fc', '1 – 3″'],
+          ['#4dabf7', '3 – 6″'],
+          ['#3b82f6', '6 – 12″'],
+          ['#6741d9', '12 – 24″'],
+          ['#9c36b5', '24″+'],
         ].map(([color, label]) => (
-          <div key={label} className="flex items-center gap-2">
-            <span className="inline-block w-3 h-3 rounded-full shadow-sm" style={{ backgroundColor: color }} />
+          <div key={label} className="flex items-center gap-2.5">
+            <span className="inline-block w-3.5 h-3.5 rounded-full" style={{ backgroundColor: color }} />
             {label}
           </div>
         ))}
       </div>
 
       {fetchedAt && (
-        <div className="absolute top-4 right-4 bg-white/90 backdrop-blur rounded-lg px-3 py-1.5 text-xs text-slate-400 shadow-sm border border-slate-100">
-          Data as of {new Date(fetchedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
+        <div className="absolute top-4 right-4 bg-[#fffdf9]/90 backdrop-blur rounded-xl px-3 py-2 text-xs text-[#bbb5a8] shadow-sm border border-[#ece6da]">
+          {new Date(fetchedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
         </div>
       )}
     </div>

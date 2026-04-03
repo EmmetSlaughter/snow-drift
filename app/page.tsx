@@ -8,7 +8,7 @@ const SnowMap = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="w-full h-full flex items-center justify-center bg-slate-100 text-slate-400 text-sm">
+      <div className="w-full h-full flex items-center justify-center bg-[#faf7f2] text-[#bbb5a8] text-sm">
         Loading map…
       </div>
     ),
@@ -44,30 +44,28 @@ export default function HomePage() {
   useEffect(() => { loadMapData(); }, []);
 
   return (
-    <div className="flex flex-col h-screen bg-slate-100 text-slate-900">
+    <div className="flex flex-col h-screen bg-[#faf7f2] text-[#4a4539]">
 
-      <header className="flex-none flex items-center gap-3 px-5 py-3 bg-white border-b border-slate-200 shadow-sm z-10">
+      <header className="flex-none flex items-center gap-3 px-5 py-3 bg-[#fffdf9] border-b border-[#ece6da] z-10">
         <div className="mr-2">
-          <h1 className="text-lg font-black tracking-tight text-slate-900 leading-none">
-            Snow<span className="text-blue-500">Drift</span>
+          <h1 className="text-xl font-black tracking-tight leading-none">
+            Snow<span className="text-[#12b886]">Drift</span>
           </h1>
-          <p className="text-[11px] text-slate-400 mt-0.5">US snowfall forecast tracker</p>
+          <p className="text-[11px] text-[#bbb5a8] mt-0.5">is it gonna snow?</p>
         </div>
 
-        <div className="w-px h-6 bg-slate-200 hidden sm:block" />
-
-        <span className="ml-auto text-xs text-slate-400">
+        <span className="ml-auto text-xs text-[#bbb5a8]">
           {loading ? '' : error ? `Error: ${error}` : count === 0
-            ? 'No snow predicted in the next 7 days'
-            : `${count} snowy point${count !== 1 ? 's' : ''} · click any to see drift`}
+            ? 'No snow in the forecast!'
+            : `${count} snowy point${count !== 1 ? 's' : ''} · click any to explore`}
         </span>
       </header>
 
       <main className="flex-1 relative">
         {error ? (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="bg-red-50 text-red-500 rounded-xl px-5 py-4 text-sm max-w-md text-center border border-red-100">
-              <p className="font-bold mb-1">Failed to load map data</p>
+            <div className="bg-[#fff5f5] text-[#e03131] rounded-2xl px-5 py-4 text-sm max-w-md text-center border border-[#ffc9c9]">
+              <p className="font-bold mb-1">Something went wrong</p>
               <p>{error}</p>
             </div>
           </div>

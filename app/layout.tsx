@@ -1,15 +1,18 @@
 import type { Metadata } from 'next';
+import { Nunito } from 'next/font/google';
 import './globals.css';
 
+const nunito = Nunito({ subsets: ['latin'] });
+
 export const metadata: Metadata = {
-  title: 'SnowDrift — US Snowfall Forecast Tracker',
-  description: 'Track how NWS and Open-Meteo snowfall predictions change over time leading up to a storm.',
+  title: 'SnowDrift',
+  description: 'Is it gonna snow? Track how forecasts change leading up to a storm.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="bg-slate-100">
-      <body className="antialiased">{children}</body>
+    <html lang="en" className={nunito.className}>
+      <body className="antialiased bg-[#faf7f2]">{children}</body>
     </html>
   );
 }
