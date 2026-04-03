@@ -82,7 +82,12 @@ async function main() {
 
   console.log(`[collect] done — ${totalRows} rows inserted, ${errors} batch errors`);
 
-  if (errors > 0) process.exit(1);
+  // Only hard-fail if we got nothing at all — partial success is acceptable
+  // given shared GitHub Actions IPs and Open-Meteo's per-minute rate limits.
+  if (totalRows === 0) {
+    console.error('[collect] zero rows inserted — marking run as failed');
+    process.exit(1);
+  }
 }
 
 main().catch(e => {
