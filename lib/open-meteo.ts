@@ -1,7 +1,9 @@
 /**
- * Fetches hourly snowfall from Open-Meteo for a batch of locations in one request.
- * Open-Meteo supports comma-separated lat/lon lists (no API key required).
- * Snowfall is returned in cm/h; we pass it through as-is.
+ * Fetches hourly snowfall from Open-Meteo for a batch of locations.
+ * Uses the commercial API (customer-api.open-meteo.com) when OPEN_METEO_KEY
+ * is set, otherwise falls back to the free tier.
+ *
+ * Supports multiple models: the default GFS-based forecast and ECMWF high-res.
  *
  * Docs: https://open-meteo.com/en/docs
  */
@@ -12,31 +14,38 @@ export interface LocationSnowRow {
   snowCm: number;
 }
 
+const API_KEY = process.env.OPEN_METEO_KEY ?? '';
+const BASE    = API_KEY
+  ? 'https://customer-api.open-meteo.com/v1'
+  : 'https://api.open-meteo.com/v1';
+
 /**
- * Fetch snowfall predictions for up to ~100 locations at once.
+ * Fetch snowfall predictions for a batch of locations from a single model.
  * Only returns rows where snowCm > 0 to minimise DB storage.
  */
 export async function fetchOpenMeteoSnowBatch(
   locations: { id: number; lat: number; lon: number }[],
+  model: 'forecast' | 'ecmwf' = 'forecast',
 ): Promise<LocationSnowRow[]> {
-  // Build URL manually — URLSearchParams encodes commas as %2C, but Open-Meteo
-  // requires literal commas to recognise the multi-location batch format.
   const lats = locations.map(l => l.lat).join(',');
   const lons = locations.map(l => l.lon).join(',');
-  const url  = `https://api.open-meteo.com/v1/forecast` +
+
+  const endpoint = model === 'ecmwf' ? 'ecmwf' : 'forecast';
+  let url = `${BASE}/${endpoint}` +
     `?latitude=${lats}&longitude=${lons}` +
     `&hourly=snowfall&forecast_days=7&timezone=UTC`;
+  if (API_KEY) url += `&apikey=${API_KEY}`;
 
   // Retry up to 3 times on 429 with exponential backoff.
   let res: Response | undefined;
   for (let attempt = 0; attempt < 3; attempt++) {
     res = await fetch(url);
     if (res.status !== 429) break;
-    const wait = (attempt + 1) * 10_000;
-    console.warn(`[open-meteo] 429 on attempt ${attempt + 1}, retrying in ${wait}ms`);
+    const wait = (attempt + 1) * 5_000;
+    console.warn(`[open-meteo:${model}] 429 on attempt ${attempt + 1}, retrying in ${wait}ms`);
     await new Promise(r => setTimeout(r, wait));
   }
-  if (!res || !res.ok) throw new Error(`Open-Meteo error ${res?.status}: ${await res?.text()}`);
+  if (!res || !res.ok) throw new Error(`Open-Meteo ${model} error ${res?.status}: ${await res?.text()}`);
   const json = await res.json();
 
   // Single location → object; multiple → array.
@@ -52,15 +61,9 @@ export async function fetchOpenMeteoSnowBatch(
       hourly?: { time: string[]; snowfall: (number | null)[] };
     };
 
-    // Sanity-check: if Open-Meteo snapped this coordinate more than 1° away
-    // from what we requested, the data belongs to a different location — skip it.
     const snapLat = result.latitude  ?? loc.lat;
     const snapLon = result.longitude ?? loc.lon;
     if (Math.abs(snapLat - loc.lat) > 0.6 || Math.abs(snapLon - loc.lon) > 0.6) {
-      console.warn(
-        `[open-meteo] skipping snapped coord: requested (${loc.lat},${loc.lon}), ` +
-        `got (${snapLat.toFixed(2)},${snapLon.toFixed(2)})`
-      );
       continue;
     }
 

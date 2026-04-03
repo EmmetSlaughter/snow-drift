@@ -28,3 +28,4 @@ jobs:
         run: npm run collect
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPEN_METEO_KEY: ${{ secrets.OPEN_METEO_KEY }}

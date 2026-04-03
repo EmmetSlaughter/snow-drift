@@ -43,11 +43,13 @@ interface PopupState {
 
 const SOURCE_COLOR: Record<string, string> = {
   'open-meteo': '#f76707',
+  'ecmwf':      '#7c3aed',
   'nws':        '#12b886',
 };
 
 const SOURCE_LABEL: Record<string, string> = {
-  'open-meteo': 'Open-Meteo',
+  'open-meteo': 'GFS',
+  'ecmwf':      'ECMWF',
   'nws':        'NWS',
 };
 
