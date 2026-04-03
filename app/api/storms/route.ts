@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
     SELECT id, window_start, window_end, detected_at
     FROM   storms
     WHERE  location_id = ${Number(locationId)}
-    ORDER  BY window_start DESC
+    ORDER  BY window_start ASC
     LIMIT  20
   `;
 

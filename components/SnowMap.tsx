@@ -164,12 +164,27 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
       : prev,
     );
     try {
-      const res  = await fetch(`/api/forecasts?locationId=${locationId}&stormId=${stormId}`);
-      const json = await res.json();
-      setPopup(prev => prev?.locationId === locationId
-        ? { ...prev, drift: json.series ?? [], driftLoading: false }
-        : prev,
-      );
+      const res    = await fetch(`/api/forecasts?locationId=${locationId}&stormId=${stormId}`);
+      const json   = await res.json();
+      const series: DriftSeries[] = json.series ?? [];
+      // Derive the latest forecast value from the most-recent fetched point across all sources.
+      let latestSnowIn: number | undefined;
+      if (series.length > 0) {
+        const allPoints = series.flatMap(s => s.points);
+        if (allPoints.length > 0) {
+          const latest = allPoints.reduce((a, b) => a.fetchedAt > b.fetchedAt ? a : b);
+          latestSnowIn = latest.snowIn;
+        }
+      }
+      setPopup(prev => {
+        if (prev?.locationId !== locationId) return prev;
+        return {
+          ...prev,
+          drift: series,
+          driftLoading: false,
+          ...(latestSnowIn !== undefined && { snowIn: latestSnowIn }),
+        };
+      });
     } catch {
       setPopup(prev => prev?.locationId === locationId
         ? { ...prev, drift: [], driftLoading: false }
@@ -189,7 +204,7 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
         const updated = { ...prev, storms };
         // Auto-select if there's exactly one storm, or the soonest upcoming one.
         if (storms.length > 0) {
-          const selected = storms[0]; // already sorted newest-window first
+          const selected = storms[storms.length - 1]; // last = most recent window
           updated.selectedStormId = selected.id;
           return updated;
         }
@@ -198,7 +213,7 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
 
       // Kick off drift fetch for the auto-selected storm.
       if (storms.length > 0) {
-        fetchDrift(locationId, storms[0].id);
+        fetchDrift(locationId, storms[storms.length - 1].id);
       }
     } catch {
       setPopup(prev => prev?.locationId === locationId
