@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Map, { Source, Layer } from 'react-map-gl/maplibre';
-import type { FillLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
+import type { FillLayer, MapLayerMouseEvent, MapRef } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -210,9 +210,26 @@ interface SnowMapProps {
   fetchedAt: string | null;
 }
 
+function findNearest(lat: number, lon: number, pts: SnowPoint[]): SnowPoint | null {
+  if (!pts.length) return null;
+  let best = pts[0];
+  let bestD = Infinity;
+  for (const p of pts) {
+    const d = (p.lat - lat) ** 2 + (p.lon - lon) ** 2;
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+interface GeoResult { place_name: string; center: [number, number] }
+
 export function SnowMap({ points, fetchedAt }: SnowMapProps) {
   const mapTilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '';
+  const mapRef = useRef<MapRef>(null);
   const [popup, setPopup] = useState<PopupState | null>(null);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<GeoResult[]>([]);
+  const [searching, setSearching] = useState(false);
 
   // Fetch the base style and patch colors to match our warm palette.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -240,6 +257,56 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         setMapStyle(`https://api.maptiler.com/maps/dataviz-light/style.json?key=${mapTilerKey}`);
       });
   }, [mapTilerKey]);
+
+  // Select a point by lat/lon: find nearest, fly to it, load storms.
+  const selectByLatLon = useCallback((lat: number, lon: number) => {
+    const nearest = findNearest(lat, lon, points);
+    if (!nearest) return;
+    mapRef.current?.flyTo({ center: [nearest.lon, nearest.lat], zoom: 7, duration: 1200 });
+    setPopup({
+      lat: nearest.lat, lon: nearest.lon, locationId: nearest.locationId,
+      snowIn: nearest.snowIn, storms: null, selectedStormId: null,
+      drift: null, hourly: null, driftLoading: false,
+    });
+    setResults([]);
+    setQuery('');
+    // fetchStormsForLocation will be called after it's defined — use a ref trick
+    queueMicrotask(() => fetchStormsRef.current?.(nearest.locationId));
+  }, [points]);
+
+  // Geocoding search via MapTiler
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(null);
+  const handleSearch = useCallback((value: string) => {
+    setQuery(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (value.length < 3) { setResults([]); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(
+          `https://api.maptiler.com/geocoding/${encodeURIComponent(value)}.json?key=${mapTilerKey}&country=us&limit=5`,
+        );
+        const json = await res.json();
+        setResults(
+          (json.features ?? []).map((f: { place_name: string; center: [number, number] }) => ({
+            place_name: f.place_name,
+            center: f.center,
+          })),
+        );
+      } catch { setResults([]); }
+      setSearching(false);
+    }, 300);
+  }, [mapTilerKey]);
+
+  // Browser geolocation
+  const handleGeolocate = useCallback(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => selectByLatLon(pos.coords.latitude, pos.coords.longitude),
+      () => {},
+      { enableHighAccuracy: false, timeout: 8000 },
+    );
+  }, [selectByLatLon]);
 
   const GRID_STEP = 0.5;
   const HALF = GRID_STEP / 2;
@@ -352,6 +419,10 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
     }
   }, [fetchDrift]);
 
+  // Ref so selectByLatLon (defined before fetchStormsForLocation) can call it.
+  const fetchStormsRef = useRef(fetchStormsForLocation);
+  fetchStormsRef.current = fetchStormsForLocation;
+
   const onClick = useCallback((e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
     if (!f) return;
@@ -378,6 +449,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         </div>
       ) : null}
       {mapStyle && <Map
+        ref={mapRef}
         initialViewState={{ longitude: -96, latitude: 38.5, zoom: 3.8 }}
         style={{ width: '100%', height: '100%' }}
         mapStyle={mapStyle}
@@ -392,76 +464,136 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
 
       </Map>}
 
-      {/* Detail panel — floating card on the right */}
-      {popup && (
-        <div className="absolute top-4 right-4 bottom-4 w-80 bg-[#fffdf9]/95 backdrop-blur-md
-                        rounded-2xl shadow-lg border border-[#ece6da] text-[#4a4539] text-sm
-                        overflow-y-auto transition-all">
-          {/* Close button */}
-          <button
-            onClick={() => setPopup(null)}
-            className="absolute top-3 right-3 text-[#bbb5a8] hover:text-[#7a7568] text-lg leading-none z-10"
-          >
-            ×
-          </button>
-
-          <div className="p-5">
-            {/* Hero number */}
-            <div className="flex items-baseline gap-1.5 mb-1">
-              <span className="text-5xl font-black text-[#3b82f6] leading-none tabular-nums">
-                {popup.snowIn.toFixed(1)}
-              </span>
-              <span className="text-2xl font-bold text-[#a5d8ff] leading-none">″</span>
-            </div>
-            <p className="text-[11px] text-[#bbb5a8] mb-4">
-              {popup.lat.toFixed(2)}°N · {Math.abs(popup.lon).toFixed(2)}°W
-            </p>
-
-            {/* Storm list */}
-            <div>
-              {popup.storms === null && (
-                <p className="text-xs text-[#bbb5a8] animate-pulse">Looking for storms…</p>
-              )}
-              {popup.storms !== null && popup.storms.length === 0 && (
-                <p className="text-xs text-[#bbb5a8]">No storms detected yet.</p>
-              )}
-              {popup.storms !== null && popup.storms.length > 0 && (
-                <>
-                  <p className="text-[10px] text-[#bbb5a8] font-bold uppercase tracking-widest mb-2">
-                    Storms
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {popup.storms.map(storm => (
-                      <button
-                        key={storm.id}
-                        onClick={() => selectStorm(storm.id)}
-                        className={`text-xs font-bold rounded-full px-3.5 py-1.5 transition-all ${
-                          popup.selectedStormId === storm.id
-                            ? 'bg-[#12b886] text-white shadow-sm'
-                            : 'bg-[#f1ede8] text-[#9e9890] hover:bg-[#e8e2da]'
-                        }`}
-                      >
-                        {fmtStormLabel(storm)}
-                      </button>
-                    ))}
-                  </div>
-                </>
+      {/* Sidebar — always visible */}
+      <div className="absolute top-4 right-4 bottom-4 w-80 bg-[#fffdf9]/95 backdrop-blur-md
+                      rounded-2xl shadow-lg border border-[#ece6da] text-[#4a4539] text-sm
+                      overflow-y-auto flex flex-col">
+        {/* Search bar */}
+        <div className="p-4 pb-2 flex-none">
+          <div className="relative flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={query}
+                onChange={e => handleSearch(e.target.value)}
+                placeholder="Search a location…"
+                className="w-full bg-[#f1ede8] text-[#4a4539] placeholder-[#bbb5a8] rounded-xl
+                           px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#12b886]/30
+                           border border-[#ece6da]"
+              />
+              {searching && (
+                <span className="absolute right-2.5 top-2.5 text-[#bbb5a8] text-[10px] animate-pulse">…</span>
               )}
             </div>
-
-            {/* Charts */}
-            {popup.driftLoading && (
-              <p className="text-xs text-[#bbb5a8] mt-3 animate-pulse">Loading drift…</p>
-            )}
-            {!popup.driftLoading && popup.hourly !== null && (
-              <HourlyChart hourly={popup.hourly} />
-            )}
-            {!popup.driftLoading && popup.drift !== null && (
-              <DriftChart drift={popup.drift} />
-            )}
+            <button
+              onClick={handleGeolocate}
+              title="Use my location"
+              className="flex-none w-9 h-9 flex items-center justify-center bg-[#f1ede8]
+                         rounded-xl border border-[#ece6da] text-[#9e9890]
+                         hover:bg-[#e8e2da] hover:text-[#4a4539] transition-colors"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="4" />
+                <line x1="12" y1="2" x2="12" y2="6" />
+                <line x1="12" y1="18" x2="12" y2="22" />
+                <line x1="2" y1="12" x2="6" y2="12" />
+                <line x1="18" y1="12" x2="22" y2="12" />
+              </svg>
+            </button>
           </div>
+
+          {/* Search results dropdown */}
+          {results.length > 0 && (
+            <div className="mt-1 bg-[#fffdf9] rounded-xl border border-[#ece6da] shadow-md overflow-hidden">
+              {results.map((r, i) => (
+                <button
+                  key={i}
+                  onClick={() => selectByLatLon(r.center[1], r.center[0])}
+                  className="w-full text-left px-3 py-2 text-xs text-[#4a4539] hover:bg-[#f1ede8]
+                             border-b border-[#ece6da] last:border-0 transition-colors"
+                >
+                  {r.place_name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Content area */}
+        <div className="flex-1 overflow-y-auto px-5 pb-5">
+          {!popup ? (
+            <div className="flex flex-col items-center justify-center h-full text-center">
+              <p className="text-[#bbb5a8] text-xs">
+                Search or click the map<br />to explore snowfall
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Close / back */}
+              <button
+                onClick={() => setPopup(null)}
+                className="text-[10px] text-[#bbb5a8] hover:text-[#7a7568] mb-3 transition-colors"
+              >
+                ← back to overview
+              </button>
+
+              {/* Hero number */}
+              <div className="flex items-baseline gap-1.5 mb-1">
+                <span className="text-5xl font-black text-[#3b82f6] leading-none tabular-nums">
+                  {popup.snowIn.toFixed(1)}
+                </span>
+                <span className="text-2xl font-bold text-[#a5d8ff] leading-none">″</span>
+              </div>
+              <p className="text-[11px] text-[#bbb5a8] mb-4">
+                {popup.lat.toFixed(2)}°N · {Math.abs(popup.lon).toFixed(2)}°W
+              </p>
+
+              {/* Storm list */}
+              <div>
+                {popup.storms === null && (
+                  <p className="text-xs text-[#bbb5a8] animate-pulse">Looking for storms…</p>
+                )}
+                {popup.storms !== null && popup.storms.length === 0 && (
+                  <p className="text-xs text-[#bbb5a8]">No storms detected yet.</p>
+                )}
+                {popup.storms !== null && popup.storms.length > 0 && (
+                  <>
+                    <p className="text-[10px] text-[#bbb5a8] font-bold uppercase tracking-widest mb-2">
+                      Storms
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {popup.storms.map(storm => (
+                        <button
+                          key={storm.id}
+                          onClick={() => selectStorm(storm.id)}
+                          className={`text-xs font-bold rounded-full px-3.5 py-1.5 transition-all ${
+                            popup.selectedStormId === storm.id
+                              ? 'bg-[#12b886] text-white shadow-sm'
+                              : 'bg-[#f1ede8] text-[#9e9890] hover:bg-[#e8e2da]'
+                          }`}
+                        >
+                          {fmtStormLabel(storm)}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Charts */}
+              {popup.driftLoading && (
+                <p className="text-xs text-[#bbb5a8] mt-3 animate-pulse">Loading drift…</p>
+              )}
+              {!popup.driftLoading && popup.hourly !== null && (
+                <HourlyChart hourly={popup.hourly} />
+              )}
+              {!popup.driftLoading && popup.drift !== null && (
+                <DriftChart drift={popup.drift} />
+              )}
+            </>
+          )}
+        </div>
+      </div>
 
       {/* Legend */}
       <div className="absolute bottom-8 left-4 bg-[#fffdf9]/90 backdrop-blur rounded-2xl px-4 py-3 pointer-events-none shadow-md border border-[#ece6da]">
