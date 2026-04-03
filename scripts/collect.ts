@@ -15,7 +15,7 @@ import { collectNWSForSnowyLocations } from '../lib/nws';
 import { detectStormsAfterCollect } from '../lib/detect-storms';
 
 const BATCH_SIZE    = 500;    // locations per Open-Meteo request
-const PAUSE_MS      = 10_000; // ms between requests (~6 req/min, well under free-tier cap)
+const PAUSE_MS      = 20_000; // ms between requests (~3 req/min, conservative for 0.5° grid)
 const RECOVERY_MS   = 30_000; // extra pause after a batch error before continuing
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
