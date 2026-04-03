@@ -1,22 +1,36 @@
 /**
- * GET /api/locations/seed
- * Populates the locations table with the full US 0.5° grid (~6,000 points).
- * Safe to call multiple times — uses ON CONFLICT DO NOTHING.
- * Run this once after /api/init.
+ * GET /api/locations/seed?step=1.0&clear=true
+ *
+ * Populates the locations table with a regular US lat/lon grid.
+ *
+ * Params:
+ *   step  — grid spacing in degrees (default: 1.0)
+ *   clear — if "true", wipes all existing snapshots and locations first
+ *
+ * Safe to call without clear=true — uses ON CONFLICT DO NOTHING.
  */
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { sql, ensureSchema } from '@/lib/db';
 import { generateUSGrid } from '@/lib/grid';
 
-export const dynamic   = 'force-dynamic';
+export const dynamic     = 'force-dynamic';
 export const maxDuration = 60;
 
-const BATCH = 500; // rows per INSERT to stay within query size limits
+const BATCH = 500;
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   await ensureSchema();
 
-  const points = generateUSGrid(0.5);
+  const { searchParams } = new URL(req.url);
+  const step  = Math.max(0.1, Math.min(2.0, Number(searchParams.get('step') ?? 1.0)));
+  const clear = searchParams.get('clear') === 'true';
+
+  if (clear) {
+    // Must delete snapshots first due to FK constraint, then locations.
+    await sql`TRUNCATE forecast_snapshots, locations RESTART IDENTITY`;
+  }
+
+  const points = generateUSGrid(step);
   let inserted = 0;
 
   for (let i = 0; i < points.length; i += BATCH) {
@@ -34,5 +48,5 @@ export async function GET() {
   }
 
   const [{ count }] = await sql`SELECT COUNT(*) AS count FROM locations`;
-  return NextResponse.json({ gridPoints: points.length, inserted, total: Number(count) });
+  return NextResponse.json({ step, gridPoints: points.length, inserted, total: Number(count) });
 }
