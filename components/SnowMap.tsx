@@ -156,14 +156,21 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       .then(r => r.json())
       .then(style => {
         for (const layer of style.layers) {
-          const paint = layer.paint ?? {};
+          if (!layer.paint) continue;
+          const id = layer.id.toLowerCase();
           // Water → warm pale gray
-          if (layer.id.includes('water') && paint['fill-color']) {
+          if (id.includes('water') && layer.paint['fill-color']) {
             layer.paint['fill-color'] = '#e8e4dd';
           }
-          // Land / background → warm off-white
-          if (layer.type === 'background' && paint['background-color']) {
+          // Background layer
+          if (layer.type === 'background' && layer.paint['background-color']) {
             layer.paint['background-color'] = '#faf7f2';
+          }
+          // Land / landcover / earth fills → warm off-white
+          if (layer.type === 'fill' && (id.includes('land') || id.includes('earth') || id.includes('park'))) {
+            if (layer.paint['fill-color']) {
+              layer.paint['fill-color'] = '#faf7f2';
+            }
           }
         }
         setMapStyle(style);
