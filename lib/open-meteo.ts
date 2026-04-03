@@ -47,15 +47,32 @@ export async function fetchOpenMeteoSnowBatch(
 
   for (let i = 0; i < results.length; i++) {
     const loc    = locations[i];
-    const times  = results[i]?.hourly?.time     ?? [];
-    const snows  = results[i]?.hourly?.snowfall ?? [];
+    const result = results[i] as Record<string, unknown> & {
+      latitude?: number; longitude?: number;
+      hourly?: { time: string[]; snowfall: (number | null)[] };
+    };
+
+    // Sanity-check: if Open-Meteo snapped this coordinate more than 1° away
+    // from what we requested, the data belongs to a different location — skip it.
+    const snapLat = result.latitude  ?? loc.lat;
+    const snapLon = result.longitude ?? loc.lon;
+    if (Math.abs(snapLat - loc.lat) > 1.0 || Math.abs(snapLon - loc.lon) > 1.0) {
+      console.warn(
+        `[open-meteo] skipping snapped coord: requested (${loc.lat},${loc.lon}), ` +
+        `got (${snapLat.toFixed(2)},${snapLon.toFixed(2)})`
+      );
+      continue;
+    }
+
+    const times = result.hourly?.time     ?? [];
+    const snows = result.hourly?.snowfall ?? [];
 
     for (let t = 0; t < times.length; t++) {
       const snowCm = snows[t] ?? 0;
       if (snowCm > 0) {
         rows.push({
           locationId: loc.id,
-          validTime:  new Date(times[t] + 'Z'),  // append Z — Open-Meteo returns UTC without it
+          validTime:  new Date(times[t] + 'Z'),
           snowCm,
         });
       }
