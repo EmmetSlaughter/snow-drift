@@ -85,16 +85,16 @@ function DriftChart({ drift }: { drift: DriftSeries[] }) {
 
   return (
     <div className="mt-3">
-      <p className="text-xs text-slate-400 mb-1 font-semibold uppercase tracking-wide">
+      <p className="text-[10px] text-slate-400 mb-1 font-bold uppercase tracking-widest">
         Forecast drift
       </p>
       <ResponsiveContainer width="100%" height={130}>
         <LineChart data={data} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-          <XAxis dataKey="t" tickFormatter={fmtTick} tick={{ fontSize: 9, fill: '#64748b' }} minTickGap={60} />
-          <YAxis unit='″' tick={{ fontSize: 9, fill: '#64748b' }} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <XAxis dataKey="t" tickFormatter={fmtTick} tick={{ fontSize: 9, fill: '#94a3b8' }} minTickGap={60} />
+          <YAxis unit='″' tick={{ fontSize: 9, fill: '#94a3b8' }} />
           <Tooltip
-            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 4, fontSize: 11 }}
+            contentStyle={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 11, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
             labelFormatter={fmtTick}
             formatter={(v: number, name: string) => [`${v.toFixed(1)}″`, name]}
           />
@@ -104,13 +104,22 @@ function DriftChart({ drift }: { drift: DriftSeries[] }) {
               type="monotone"
               dataKey={s.source}
               stroke={SOURCE_COLOR[s.source] ?? '#8884d8'}
-              strokeWidth={1.5}
+              strokeWidth={2}
               dot={false}
               connectNulls
             />
           ))}
         </LineChart>
       </ResponsiveContainer>
+      {/* Source legend */}
+      <div className="flex gap-3 mt-1">
+        {drift.map(s => (
+          <div key={s.source} className="flex items-center gap-1">
+            <span className="inline-block w-3 h-0.5 rounded" style={{ backgroundColor: SOURCE_COLOR[s.source] ?? '#8884d8' }} />
+            <span className="text-[10px] text-slate-400">{s.source}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -142,19 +151,19 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
     type: 'circle',
     source: 'snow',
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 4, 6, 8, 9, 14],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 5, 6, 9, 9, 15],
       'circle-color': [
         'interpolate', ['linear'], ['get', 'snowIn'],
-         0.1, '#bfdbfe',
-         1,   '#60a5fa',
-         3,   '#2563eb',
+         0.1, '#93c5fd',
+         1,   '#3b82f6',
+         3,   '#1d4ed8',
          6,   '#1e3a8a',
         12,   '#4c1d95',
-        24,   '#7e22ce',
+        24,   '#7c3aed',
       ],
-      'circle-opacity': 0.85,
-      'circle-stroke-width': 1,
-      'circle-stroke-color': 'rgba(0,0,0,0.25)',
+      'circle-opacity': 0.9,
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': 'rgba(255,255,255,0.6)',
     },
   };
 
@@ -202,7 +211,6 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
       setPopup(prev => {
         if (prev?.locationId !== locationId) return prev;
         const updated = { ...prev, storms };
-        // Auto-select if there's exactly one storm, or the soonest upcoming one.
         if (storms.length > 0) {
           const selected = storms[storms.length - 1]; // last = most recent window
           updated.selectedStormId = selected.id;
@@ -245,7 +253,7 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
       <Map
         initialViewState={{ longitude: -96, latitude: 38.5, zoom: 3.8 }}
         style={{ width: '100%', height: '100%' }}
-        mapStyle={`https://api.maptiler.com/maps/dataviz-dark/style.json?key=${mapTilerKey}`}
+        mapStyle={`https://api.maptiler.com/maps/dataviz/style.json?key=${mapTilerKey}`}
         interactiveLayerIds={['snow-circles']}
         onClick={onClick}
         cursor="auto"
@@ -261,20 +269,25 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
             anchor="bottom"
             onClose={() => setPopup(null)}
             closeOnClick={false}
-            maxWidth="300px"
+            maxWidth="320px"
             className="snow-popup"
           >
-            <div className="bg-slate-800 text-slate-100 rounded-lg p-3 text-sm min-w-[260px]">
-              {/* Header */}
-              <p className="font-semibold text-white text-base">
-                {popup.snowIn.toFixed(1)}″ predicted
-              </p>
-              <p className="text-xs text-slate-400">
-                {popup.lat.toFixed(1)}°N, {Math.abs(popup.lon).toFixed(1)}°W
+            <div className="bg-white text-slate-900 rounded-2xl p-4 text-sm min-w-[280px]">
+
+              {/* Hero number */}
+              <div className="flex items-baseline gap-1.5 mb-0.5">
+                <span className="text-4xl font-black text-blue-500 leading-none tabular-nums">
+                  {popup.snowIn.toFixed(1)}
+                </span>
+                <span className="text-2xl font-bold text-blue-300 leading-none">″</span>
+                <span className="text-slate-400 text-xs ml-1">predicted</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mb-3">
+                {popup.lat.toFixed(2)}°N · {Math.abs(popup.lon).toFixed(2)}°W
               </p>
 
               {/* Storm list */}
-              <div className="mt-3">
+              <div>
                 {popup.storms === null && (
                   <p className="text-xs text-slate-400 animate-pulse">Loading storms…</p>
                 )}
@@ -283,18 +296,18 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
                 )}
                 {popup.storms !== null && popup.storms.length > 0 && (
                   <>
-                    <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">
-                      Detected storms
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1.5">
+                      Storms
                     </p>
-                    <div className="flex flex-wrap gap-1">
+                    <div className="flex flex-wrap gap-1.5">
                       {popup.storms.map(storm => (
                         <button
                           key={storm.id}
                           onClick={() => selectStorm(storm.id)}
-                          className={`text-xs rounded px-2 py-0.5 transition-colors ${
+                          className={`text-xs font-semibold rounded-full px-3 py-1 transition-colors ${
                             popup.selectedStormId === storm.id
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                              ? 'bg-blue-500 text-white shadow-sm'
+                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                           }`}
                         >
                           {fmtStormLabel(storm)}
@@ -318,25 +331,25 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
       </Map>
 
       {/* Legend */}
-      <div className="absolute bottom-8 left-4 bg-slate-900/90 backdrop-blur rounded-lg px-3 py-2 text-xs text-slate-300 space-y-1 pointer-events-none">
-        <p className="font-semibold text-slate-200 mb-1">Predicted snow</p>
+      <div className="absolute bottom-8 left-4 bg-white/90 backdrop-blur rounded-xl px-3 py-2.5 text-xs text-slate-600 space-y-1.5 pointer-events-none shadow-md border border-slate-100">
+        <p className="font-bold text-slate-700 mb-1 text-[11px] uppercase tracking-widest">Predicted snow</p>
         {[
-          ['#bfdbfe', 'Trace – 1″'],
-          ['#60a5fa', '1 – 3″'],
-          ['#2563eb', '3 – 6″'],
+          ['#93c5fd', 'Trace – 1″'],
+          ['#3b82f6', '1 – 3″'],
+          ['#1d4ed8', '3 – 6″'],
           ['#1e3a8a', '6 – 12″'],
           ['#4c1d95', '12 – 24″'],
-          ['#7e22ce', '24″+'],
+          ['#7c3aed', '24″+'],
         ].map(([color, label]) => (
           <div key={label} className="flex items-center gap-2">
-            <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
+            <span className="inline-block w-3 h-3 rounded-full shadow-sm" style={{ backgroundColor: color }} />
             {label}
           </div>
         ))}
       </div>
 
       {fetchedAt && (
-        <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur rounded px-2 py-1 text-xs text-slate-400">
+        <div className="absolute top-4 right-4 bg-white/90 backdrop-blur rounded-lg px-3 py-1.5 text-xs text-slate-400 shadow-sm border border-slate-100">
           Data as of {new Date(fetchedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
         </div>
       )}
