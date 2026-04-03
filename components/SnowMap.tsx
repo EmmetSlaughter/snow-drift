@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Map, { Source, Layer, Popup } from 'react-map-gl/maplibre';
-import type { CircleLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
+import type { CircleLayer, HeatmapLayer, MapLayerMouseEvent } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -190,12 +190,56 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
     })),
   }), [points]);
 
+  // Heatmap: soft glow that shows storm systems at a glance.
+  // Fades as you zoom in, where circles take over.
+  const heatmapLayer: HeatmapLayer = {
+    id: 'snow-heat',
+    type: 'heatmap',
+    source: 'snow',
+    paint: {
+      'heatmap-weight': [
+        'interpolate', ['linear'], ['get', 'snowIn'],
+        0, 0,
+        6, 0.5,
+        24, 1,
+      ],
+      'heatmap-intensity': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0.8,
+        7, 1.5,
+        10, 2,
+      ],
+      'heatmap-color': [
+        'interpolate', ['linear'], ['heatmap-density'],
+        0,    'rgba(0,0,0,0)',
+        0.15, 'rgba(165,216,255,0.3)',
+        0.3,  'rgba(116,192,252,0.5)',
+        0.5,  'rgba(77,171,247,0.6)',
+        0.7,  'rgba(59,130,246,0.7)',
+        0.85, 'rgba(103,65,217,0.75)',
+        1.0,  'rgba(156,54,181,0.8)',
+      ],
+      'heatmap-radius': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 18,
+        6, 28,
+        9, 40,
+      ],
+      'heatmap-opacity': [
+        'interpolate', ['linear'], ['zoom'],
+        6, 0.9,
+        10, 0.3,
+      ],
+    },
+  };
+
+  // Circles: small at overview, growing on zoom-in. Always clickable.
   const circleLayer: CircleLayer = {
     id: 'snow-circles',
     type: 'circle',
     source: 'snow',
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 5, 6, 10, 9, 16],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 2.5, 6, 4, 9, 12],
       'circle-color': [
         'interpolate', ['linear'], ['get', 'snowIn'],
          0.1, '#a5d8ff',
@@ -205,8 +249,8 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         12,   '#6741d9',
         24,   '#9c36b5',
       ],
-      'circle-opacity': 0.85,
-      'circle-stroke-width': 2,
+      'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.5, 7, 0.7, 10, 0.9],
+      'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 3, 0.5, 9, 2],
       'circle-stroke-color': 'rgba(255,255,255,0.7)',
     },
   };
@@ -306,6 +350,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         cursor="auto"
       >
         <Source id="snow" type="geojson" data={geojson}>
+          <Layer {...heatmapLayer} />
           <Layer {...circleLayer} />
         </Source>
 
