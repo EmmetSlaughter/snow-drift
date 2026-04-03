@@ -56,7 +56,7 @@ export async function fetchOpenMeteoSnowBatch(
     // from what we requested, the data belongs to a different location — skip it.
     const snapLat = result.latitude  ?? loc.lat;
     const snapLon = result.longitude ?? loc.lon;
-    if (Math.abs(snapLat - loc.lat) > 1.0 || Math.abs(snapLon - loc.lon) > 1.0) {
+    if (Math.abs(snapLat - loc.lat) > 0.6 || Math.abs(snapLon - loc.lon) > 0.6) {
       console.warn(
         `[open-meteo] skipping snapped coord: requested (${loc.lat},${loc.lon}), ` +
         `got (${snapLat.toFixed(2)},${snapLon.toFixed(2)})`
