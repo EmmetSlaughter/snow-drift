@@ -277,7 +277,13 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         12, '#6741d9',  // 12 – 24″
         24, '#9c36b5',  // 24″+
       ],
-      'fill-opacity': 0.8,
+      'fill-opacity': [
+        'interpolate', ['linear'], ['get', 'lat'],
+        24.5, 0,
+        26,   0.8,
+        47,   0.8,
+        49,   0,
+      ],
       'fill-antialias': false,
     },
   };
@@ -378,7 +384,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
         interactiveLayerIds={['snow-fill']}
         onClick={onClick}
         cursor="auto"
-        maxBounds={[[-135, 22], [-60, 52]]}
+        minZoom={3.5}
       >
         <Source id="snow" type="geojson" data={geojson}>
           <Layer {...fillLayer} />
