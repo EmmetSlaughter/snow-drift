@@ -18,6 +18,12 @@ interface SnowPoint {
   snowIn: number;
 }
 
+interface Storm {
+  id: number;
+  windowStart: string;
+  windowEnd: string;
+}
+
 interface DriftPoint  { fetchedAt: string; snowIn: number }
 interface DriftSeries { source: string; points: DriftPoint[] }
 
@@ -26,7 +32,10 @@ interface PopupState {
   lon: number;
   locationId: number;
   snowIn: number;
-  drift: DriftSeries[] | null;   // null = loading
+  storms: Storm[] | null;       // null = loading
+  selectedStormId: number | null;
+  drift: DriftSeries[] | null;  // null = not yet loaded
+  driftLoading: boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -36,11 +45,29 @@ const SOURCE_COLOR: Record<string, string> = {
   'nws':        '#3b82f6',
 };
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function fmtStormLabel(storm: Storm): string {
+  const start = new Date(storm.windowStart);
+  const end   = new Date(storm.windowEnd);
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', timeZone: 'UTC' };
+  const s = start.toLocaleDateString('en-US', opts);
+  const e = end.toLocaleDateString('en-US', opts);
+  return s === e ? s : `${s} – ${e}`;
+}
+
+function fmtTick(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric',
+    hour: 'numeric', hour12: true,
+  });
+}
+
 // ── Sub-components ───────────────────────────────────────────────────────────
 
 function DriftChart({ drift }: { drift: DriftSeries[] }) {
   if (!drift.length) {
-    return <p className="text-xs text-slate-400 mt-2">No drift history yet.</p>;
+    return <p className="text-xs text-slate-400 mt-2">No drift history yet — check back after a few more hourly polls.</p>;
   }
 
   const timeSet = new Set<string>();
@@ -55,9 +82,6 @@ function DriftChart({ drift }: { drift: DriftSeries[] }) {
     }
     return entry;
   });
-
-  const fmtTick = (iso: string) =>
-    new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', hour12: true });
 
   return (
     <div className="mt-3">
@@ -104,7 +128,6 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
   const mapTilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '';
   const [popup, setPopup] = useState<PopupState | null>(null);
 
-  // Build GeoJSON from the snow points array.
   const geojson = useMemo(() => ({
     type: 'FeatureCollection' as const,
     features: points.map(p => ({
@@ -119,20 +142,15 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
     type: 'circle',
     source: 'snow',
     paint: {
-      'circle-radius': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 4,
-        6, 8,
-        9, 14,
-      ],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 4, 6, 8, 9, 14],
       'circle-color': [
         'interpolate', ['linear'], ['get', 'snowIn'],
-         0.1, '#bfdbfe',  // trace  — light blue
-         1,   '#60a5fa',  // 1"     — blue
-         3,   '#2563eb',  // 3"     — med blue
-         6,   '#1e3a8a',  // 6"     — dark blue
-        12,   '#4c1d95',  // 12"    — purple
-        24,   '#7e22ce',  // 2'     — deep purple
+         0.1, '#bfdbfe',
+         1,   '#60a5fa',
+         3,   '#2563eb',
+         6,   '#1e3a8a',
+        12,   '#4c1d95',
+        24,   '#7e22ce',
       ],
       'circle-opacity': 0.85,
       'circle-stroke-width': 1,
@@ -140,40 +158,72 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
     },
   };
 
-  const fetchDrift = useCallback(async (locationId: number) => {
+  const fetchDrift = useCallback(async (locationId: number, stormId: number) => {
+    setPopup(prev => prev?.locationId === locationId
+      ? { ...prev, driftLoading: true, drift: null }
+      : prev,
+    );
     try {
-      const res = await fetch(
-        `/api/forecasts?locationId=${locationId}` +
-        `&start=${encodeURIComponent(windowStart)}&end=${encodeURIComponent(windowEnd)}`,
-      );
+      const res  = await fetch(`/api/forecasts?locationId=${locationId}&stormId=${stormId}`);
       const json = await res.json();
       setPopup(prev => prev?.locationId === locationId
-        ? { ...prev, drift: json.series ?? [] }
+        ? { ...prev, drift: json.series ?? [], driftLoading: false }
         : prev,
       );
     } catch {
       setPopup(prev => prev?.locationId === locationId
-        ? { ...prev, drift: [] }
+        ? { ...prev, drift: [], driftLoading: false }
         : prev,
       );
     }
-  }, [windowStart, windowEnd]);
+  }, []);
+
+  const fetchStormsForLocation = useCallback(async (locationId: number) => {
+    try {
+      const res  = await fetch(`/api/storms?locationId=${locationId}`);
+      const json = await res.json();
+      const storms: Storm[] = json.storms ?? [];
+
+      setPopup(prev => {
+        if (prev?.locationId !== locationId) return prev;
+        const updated = { ...prev, storms };
+        // Auto-select if there's exactly one storm, or the soonest upcoming one.
+        if (storms.length > 0) {
+          const selected = storms[0]; // already sorted newest-window first
+          updated.selectedStormId = selected.id;
+          return updated;
+        }
+        return updated;
+      });
+
+      // Kick off drift fetch for the auto-selected storm.
+      if (storms.length > 0) {
+        fetchDrift(locationId, storms[0].id);
+      }
+    } catch {
+      setPopup(prev => prev?.locationId === locationId
+        ? { ...prev, storms: [] }
+        : prev,
+      );
+    }
+  }, [fetchDrift]);
 
   const onClick = useCallback((e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
     if (!f || f.geometry.type !== 'Point') return;
     const [lon, lat] = f.geometry.coordinates as [number, number];
     const { locationId, snowIn } = f.properties as { locationId: number; snowIn: number };
-    setPopup({ lat, lon, locationId, snowIn, drift: null });
-    fetchDrift(locationId);
-  }, [fetchDrift]);
+    setPopup({ lat, lon, locationId, snowIn, storms: null, selectedStormId: null, drift: null, driftLoading: false });
+    fetchStormsForLocation(locationId);
+  }, [fetchStormsForLocation]);
 
-  const fmtWindow = (iso: string) =>
-    new Date(iso).toLocaleString('en-US', {
-      month: 'short', day: 'numeric',
-      hour: 'numeric', hour12: true,
-      timeZoneName: 'short',
+  const selectStorm = useCallback((stormId: number) => {
+    setPopup(prev => {
+      if (!prev) return prev;
+      return { ...prev, selectedStormId: stormId, drift: null, driftLoading: true };
     });
+    if (popup) fetchDrift(popup.locationId, stormId);
+  }, [popup, fetchDrift]);
 
   return (
     <div className="relative w-full h-full">
@@ -196,30 +246,55 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
             anchor="bottom"
             onClose={() => setPopup(null)}
             closeOnClick={false}
-            maxWidth="280px"
+            maxWidth="300px"
             className="snow-popup"
           >
-            <div className="bg-slate-800 text-slate-100 rounded-lg p-3 text-sm min-w-[240px]">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-semibold text-white text-base">
-                    {popup.snowIn.toFixed(1)}″ predicted
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    {popup.lat.toFixed(2)}°N, {Math.abs(popup.lon).toFixed(2)}°W
-                  </p>
-                </div>
-              </div>
-              <p className="text-xs text-slate-400 mt-1">
-                {fmtWindow(windowStart)} → {fmtWindow(windowEnd)}
+            <div className="bg-slate-800 text-slate-100 rounded-lg p-3 text-sm min-w-[260px]">
+              {/* Header */}
+              <p className="font-semibold text-white text-base">
+                {popup.snowIn.toFixed(1)}″ predicted
+              </p>
+              <p className="text-xs text-slate-400">
+                {popup.lat.toFixed(1)}°N, {Math.abs(popup.lon).toFixed(1)}°W
               </p>
 
-              {popup.drift === null && (
-                <p className="text-xs text-slate-400 mt-3 animate-pulse">
-                  Loading drift history…
-                </p>
+              {/* Storm list */}
+              <div className="mt-3">
+                {popup.storms === null && (
+                  <p className="text-xs text-slate-400 animate-pulse">Loading storms…</p>
+                )}
+                {popup.storms !== null && popup.storms.length === 0 && (
+                  <p className="text-xs text-slate-400">No storms detected yet.</p>
+                )}
+                {popup.storms !== null && popup.storms.length > 0 && (
+                  <>
+                    <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">
+                      Detected storms
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {popup.storms.map(storm => (
+                        <button
+                          key={storm.id}
+                          onClick={() => selectStorm(storm.id)}
+                          className={`text-xs rounded px-2 py-0.5 transition-colors ${
+                            popup.selectedStormId === storm.id
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                          }`}
+                        >
+                          {fmtStormLabel(storm)}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Drift chart */}
+              {popup.driftLoading && (
+                <p className="text-xs text-slate-400 mt-3 animate-pulse">Loading drift history…</p>
               )}
-              {popup.drift !== null && (
+              {!popup.driftLoading && popup.drift !== null && (
                 <DriftChart drift={popup.drift} />
               )}
             </div>
@@ -245,7 +320,6 @@ export function SnowMap({ points, windowStart, windowEnd, fetchedAt }: SnowMapPr
         ))}
       </div>
 
-      {/* Data freshness badge */}
       {fetchedAt && (
         <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur rounded px-2 py-1 text-xs text-slate-400">
           Data as of {new Date(fetchedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}

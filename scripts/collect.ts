@@ -11,6 +11,7 @@
 
 import { sql, ensureSchema } from '../lib/db';
 import { fetchOpenMeteoSnowBatch } from '../lib/open-meteo';
+import { detectStormsAfterCollect } from '../lib/detect-storms';
 
 const BATCH_SIZE    = 500;    // locations per Open-Meteo request
 const PAUSE_MS      = 10_000; // ms between requests (~6 req/min, well under free-tier cap)
@@ -81,6 +82,11 @@ async function main() {
   }
 
   console.log(`[collect] done — ${totalRows} rows inserted, ${errors} batch errors`);
+
+  if (totalRows > 0) {
+    const storms = await detectStormsAfterCollect(fetchedAt);
+    console.log(`[collect] storm detection — ${storms} storms upserted`);
+  }
 
   // Only hard-fail if we got nothing at all — partial success is acceptable
   // given shared GitHub Actions IPs and Open-Meteo's per-minute rate limits.

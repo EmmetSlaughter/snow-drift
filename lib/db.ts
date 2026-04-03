@@ -60,4 +60,20 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_snapshots_valid_time
     ON forecast_snapshots (valid_time)
   `;
+
+  // Storms — one row per detected precipitation event per location.
+  await sql`
+    CREATE TABLE IF NOT EXISTS storms (
+      id           SERIAL      PRIMARY KEY,
+      location_id  INTEGER     NOT NULL REFERENCES locations (id),
+      window_start TIMESTAMPTZ NOT NULL,
+      window_end   TIMESTAMPTZ NOT NULL,
+      detected_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_storms_location
+    ON storms (location_id, window_start)
+  `;
 }
