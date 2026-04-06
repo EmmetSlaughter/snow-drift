@@ -29,7 +29,7 @@ const RECOVERY_MS = 10_000;
 // Hard limits to prevent runaway costs on Neon (no built-in spend cap).
 const MAX_ROWS_PER_MODEL   = 50_000;  // per model per run — enough for a major storm
 const MAX_TOTAL_ROWS       = 120_000; // across all models + NWS in one run
-const MAX_SNAPSHOT_ROWS    = 5_000_000; // abort if table exceeds this (steady state ~2-3M)
+const MAX_SNAPSHOT_ROWS    = 8_000_000; // abort if table exceeds this — temporary buffer while legacy data prunes
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -131,7 +131,9 @@ async function main() {
     process.exit(1);
   }
 
-  await sql`DELETE FROM forecast_snapshots WHERE fetched_at < NOW() - INTERVAL '7 days'`;
+  // Prune: keep only 3 days of history to bring row count down from legacy data.
+  // Can raise back to 7 days once the table stabilizes at the new (snowy-only) volume.
+  await sql`DELETE FROM forecast_snapshots WHERE fetched_at < NOW() - INTERVAL '3 days'`;
   await sql`DELETE FROM storms WHERE window_end < NOW()`;
 
   // Safety check: abort if the table is already too large.
