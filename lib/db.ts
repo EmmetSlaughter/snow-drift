@@ -82,4 +82,14 @@ export async function ensureSchema(): Promise<void> {
   await sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS nws_office  VARCHAR(10)`;
   await sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS nws_grid_x  INTEGER`;
   await sql`ALTER TABLE locations ADD COLUMN IF NOT EXISTS nws_grid_y  INTEGER`;
+
+  // Pre-aggregated map data — single row updated each cron run.
+  // Replaces the heavy per-request query that scanned all forecast_snapshots.
+  await sql`
+    CREATE TABLE IF NOT EXISTS map_cache (
+      id         INTEGER          PRIMARY KEY DEFAULT 1,
+      fetched_at TIMESTAMPTZ      NOT NULL,
+      data       JSONB            NOT NULL
+    )
+  `;
 }

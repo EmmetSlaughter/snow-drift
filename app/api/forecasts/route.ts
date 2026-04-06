@@ -3,7 +3,12 @@
  *
  * Returns:
  *   series  — drift time-series (how the total forecast changed over time)
- *   hourly  — hour-by-hour snowfall from the most recent forecast (when snow falls)
+ *   hourly  — hour-by-hour snowfall from the most recent forecast (future hours)
+ *             plus estimated fallen snow for past hours (from the last forecast
+ *             made before each hour occurred)
+ *
+ * Each hourly entry has a `kind` field: "estimated" for past hours, "predicted"
+ * for future hours.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
@@ -36,7 +41,11 @@ export async function GET(req: NextRequest) {
     windowEnd   = searchParams.get('end')   ?? new Date(Date.now() + 48 * 3_600_000).toISOString();
   }
 
-  // ── Drift series (existing) ───────────────────────────────────────────────
+  const now = new Date().toISOString();
+
+  // ── Drift series ──────────────────────────────────────────────────────────
+  // For drift, show storm total = estimated fallen (past hours) + predicted
+  // remaining (future hours) at each fetch time.
   const driftRows = await sql`
     SELECT
       source,
@@ -61,14 +70,32 @@ export async function GET(req: NextRequest) {
   }
   const series = Object.entries(seriesMap).map(([source, points]) => ({ source, points }));
 
-  // ── Hourly breakdown (new) ────────────────────────────────────────────────
-  // For each source, get the most recent fetch's hour-by-hour snowfall.
-  const hourlyRows = await sql`
+  // ── Hourly breakdown ──────────────────────────────────────────────────────
+  // Future hours: latest forecast's hour-by-hour snowfall (as before).
+  // Past hours: for each hour that has already passed, pick the snow_cm from
+  // the last forecast made *before* that hour — best proxy for what actually fell.
+
+  // 1) Past hours — estimated fallen
+  const pastRows = await sql`
+    SELECT DISTINCT ON (source, valid_time)
+      source,
+      valid_time,
+      ROUND((snow_cm * 0.3937)::numeric, 2) AS snow_in
+    FROM   forecast_snapshots
+    WHERE  location_id = ${Number(locationId)}
+      AND  valid_time >= ${windowStart}::timestamptz
+      AND  valid_time <  ${now}::timestamptz
+      AND  fetched_at <  valid_time
+    ORDER  BY source, valid_time, fetched_at DESC
+  `;
+
+  // 2) Future hours — latest forecast
+  const futureRows = await sql`
     WITH latest AS (
       SELECT source, MAX(date_trunc('hour', fetched_at)) AS fetched_at
       FROM   forecast_snapshots
       WHERE  location_id = ${Number(locationId)}
-        AND  valid_time >= ${windowStart}::timestamptz
+        AND  valid_time >= ${now}::timestamptz
         AND  valid_time <  ${windowEnd}::timestamptz
       GROUP  BY source
     )
@@ -81,22 +108,46 @@ export async function GET(req: NextRequest) {
       ON   l.source     = fs.source
      AND   date_trunc('hour', fs.fetched_at) = l.fetched_at
     WHERE  fs.location_id = ${Number(locationId)}
-      AND  fs.valid_time  >= ${windowStart}::timestamptz
+      AND  fs.valid_time  >= ${now}::timestamptz
       AND  fs.valid_time  <  ${windowEnd}::timestamptz
     ORDER  BY fs.valid_time
   `;
 
-  // Group into { validTime, "open-meteo": X, "nws": Y } entries
+  // Merge into unified hourly entries with kind markers.
+  // Shape: { t, kind, "open-meteo": X, "nws": Y, ... }
   const hourlyMap = new Map<string, Record<string, string | number>>();
-  for (const row of hourlyRows) {
-    const t   = (row.valid_time as Date).toISOString();
-    const src = row.source as string;
-    if (!hourlyMap.has(t)) hourlyMap.set(t, { t });
-    hourlyMap.get(t)![src] = Number(row.snow_in);
+
+  for (const row of pastRows) {
+    const t    = (row.valid_time as Date).toISOString();
+    const src  = row.source as string;
+    const key  = `${t}:estimated`;
+    if (!hourlyMap.has(key)) hourlyMap.set(key, { t, kind: 'estimated' });
+    hourlyMap.get(key)![src] = Number(row.snow_in);
   }
+
+  for (const row of futureRows) {
+    const t    = (row.valid_time as Date).toISOString();
+    const src  = row.source as string;
+    const key  = `${t}:predicted`;
+    if (!hourlyMap.has(key)) hourlyMap.set(key, { t, kind: 'predicted' });
+    hourlyMap.get(key)![src] = Number(row.snow_in);
+  }
+
   const hourly = Array.from(hourlyMap.values()).sort(
     (a, b) => (a.t as string).localeCompare(b.t as string),
   );
 
-  return NextResponse.json({ series, hourly, windowStart, windowEnd });
+  // ── Storm totals ──────────────────────────────────────────────────────────
+  // Provide a convenience total: estimated fallen + predicted remaining.
+  const estimatedIn: Record<string, number> = {};
+  const predictedIn: Record<string, number> = {};
+  for (const entry of hourly) {
+    const bucket = entry.kind === 'estimated' ? estimatedIn : predictedIn;
+    for (const [key, val] of Object.entries(entry)) {
+      if (key === 't' || key === 'kind') continue;
+      bucket[key] = (bucket[key] ?? 0) + (val as number);
+    }
+  }
+
+  return NextResponse.json({ series, hourly, windowStart, windowEnd, estimatedIn, predictedIn });
 }

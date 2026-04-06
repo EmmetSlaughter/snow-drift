@@ -1,7 +1,8 @@
 /**
  * GET /api/cron
- * Polls Open-Meteo for all grid locations and stores non-zero snow forecasts.
- * Also prunes snapshots older than 14 days to keep the DB footprint bounded.
+ * Polls Open-Meteo for all grid locations, aggregates map data into
+ * map_cache, and stores detailed hourly rows only for snowy locations
+ * (for drift charts).  Prunes snapshots older than 7 days.
  *
  * Called hourly by cron-job.org:
  *   Authorization: Bearer <CRON_SECRET>
@@ -13,8 +14,8 @@ import { fetchOpenMeteoSnowBatch } from '@/lib/open-meteo';
 export const dynamic     = 'force-dynamic';
 export const maxDuration = 60;
 
-const OM_BATCH_SIZE = 500; // locations per request → ~13 requests total
-const OM_PAUSE_MS   = 2000; // 2s between requests — keeps us well under the free-tier per-minute cap
+const OM_BATCH_SIZE = 500;
+const OM_PAUSE_MS   = 2000;
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -27,6 +28,8 @@ export async function GET(req: NextRequest) {
   await ensureSchema();
 
   const fetchedAt = new Date().toISOString();
+  const windowEnd = new Date(Date.now() + 7 * 24 * 3_600_000);
+  const now       = new Date();
   const result: Record<string, unknown> = { fetchedAt };
 
   // ── Load all locations ────────────────────────────────────────────────────
@@ -38,8 +41,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'No locations seeded. Run /api/locations/seed first.' }, { status: 400 });
   }
 
-  // ── Prune data older than 14 days ─────────────────────────────────────────
-  await sql`DELETE FROM forecast_snapshots WHERE fetched_at < NOW() - INTERVAL '14 days'`;
+  // ── Prune old data ─────────────────────────────────────────────────────────
+  await sql`DELETE FROM forecast_snapshots WHERE fetched_at < NOW() - INTERVAL '7 days'`;
+  await sql`DELETE FROM storms WHERE window_end < NOW()`;
 
   // ── Chunk locations into batches ──────────────────────────────────────────
   const batches: typeof locations[] = [];
@@ -51,10 +55,26 @@ export async function GET(req: NextRequest) {
   let batchErrors = 0;
   const sampleErrors: string[] = [];
 
+  // Per-location 7-day snow totals for the map cache.
+  const locationLookup = new Map(locations.map(l => [l.id, { lat: l.lat, lon: l.lon }]));
+  const mapTotals = new Map<number, { lat: number; lon: number; snowCm: number }>();
+
   for (let i = 0; i < batches.length; i++) {
     if (i > 0) await sleep(OM_PAUSE_MS);
     try {
       const rows = await fetchOpenMeteoSnowBatch(batches[i]);
+
+      // Accumulate map totals in-memory.
+      for (const r of rows) {
+        if (r.validTime >= now && r.validTime < windowEnd) {
+          const loc = locationLookup.get(r.locationId)!;
+          const entry = mapTotals.get(r.locationId) ?? { lat: loc.lat, lon: loc.lon, snowCm: 0 };
+          entry.snowCm += r.snowCm;
+          mapTotals.set(r.locationId, entry);
+        }
+      }
+
+      // Write detailed hourly rows (for drift charts).
       if (rows.length === 0) continue;
 
       const locationIds = rows.map(r => r.locationId);
@@ -78,9 +98,28 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── Write map cache ─────────────────────────────────────────────────────
+  const mapPoints: { locationId: number; lat: number; lon: number; snowIn: number }[] = [];
+  for (const [locationId, entry] of mapTotals) {
+    const snowIn = Math.round(entry.snowCm * 0.3937 * 100) / 100;
+    if (snowIn > 0) {
+      mapPoints.push({ locationId, lat: entry.lat, lon: entry.lon, snowIn });
+    }
+  }
+  mapPoints.sort((a, b) => b.snowIn - a.snowIn);
+
+  await sql`
+    INSERT INTO map_cache (id, fetched_at, data)
+    VALUES (1, ${fetchedAt}::timestamptz, ${JSON.stringify(mapPoints)}::jsonb)
+    ON CONFLICT (id) DO UPDATE
+    SET fetched_at = EXCLUDED.fetched_at,
+        data       = EXCLUDED.data
+  `;
+
   result.locations    = locations.length;
   result.batches      = batches.length;
   result.rowsInserted = totalRows;
+  result.mapPoints    = mapPoints.length;
   result.batchErrors  = batchErrors;
   if (sampleErrors.length) result.sampleErrors = sampleErrors;
 

@@ -18,8 +18,8 @@ import type { LocationSnowRow } from './open-meteo';
 
 const NWS_BASE   = 'https://api.weather.gov';
 const UA         = 'snow-drift/1.0 (github.com/EmmetSlaughter/snow-drift)';
-const CONCURRENT = 5;    // parallel requests per batch
-const PAUSE_MS   = 250;  // ms between batches
+const CONCURRENT = 10;   // parallel requests per batch
+const PAUSE_MS   = 200;  // ms between batches
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -162,13 +162,18 @@ export async function collectNWSForSnowyLocations(
   }
 
   // ── Step 2: fetch forecasts for covered locations ─────────────────────────
-  const covered = locs.filter(
+  const allCovered = locs.filter(
     l => l.nws_office && l.nws_office !== 'NONE'
       && l.nws_grid_x != null && l.nws_grid_y != null,
   );
 
+  // Cap NWS fetches to avoid job timeouts — NWS has no batch API,
+  // so each location is a separate HTTP call.
+  const MAX_NWS_FETCHES = 400;
+  const covered = allCovered.slice(0, MAX_NWS_FETCHES);
+
   if (!covered.length) return 0;
-  console.log(`[nws] fetching forecasts for ${covered.length} locations…`);
+  console.log(`[nws] fetching forecasts for ${covered.length} locations (${allCovered.length} total covered, capped at ${MAX_NWS_FETCHES})…`);
 
   const allRows: LocationSnowRow[] = [];
   let errors = 0;

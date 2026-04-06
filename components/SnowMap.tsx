@@ -145,13 +145,27 @@ function HourlyChart({ hourly }: { hourly: Record<string, string | number>[] }) 
     return <p className="text-xs text-[#bbb5a8] mt-2">No hourly data available.</p>;
   }
 
-  // Determine which sources are present
+  // Split into estimated (past) and predicted (future) series.
+  // Each source gets two bar series: "open-meteo:est" and "open-meteo:pred".
   const sources = new Set<string>();
   for (const entry of hourly) {
     for (const key of Object.keys(entry)) {
-      if (key !== 't') sources.add(key);
+      if (key !== 't' && key !== 'kind') sources.add(key);
     }
   }
+
+  const hasEstimated = hourly.some(e => e.kind === 'estimated');
+  const hasPredicted = hourly.some(e => e.kind === 'predicted');
+
+  // Flatten into chart-ready data: for each timestamp, set source:est or source:pred keys.
+  const chartData = hourly.map(entry => {
+    const row: Record<string, string | number> = { t: entry.t };
+    const suffix = entry.kind === 'estimated' ? ':est' : ':pred';
+    for (const src of sources) {
+      if (entry[src] !== undefined) row[src + suffix] = entry[src];
+    }
+    return row;
+  });
 
   return (
     <div className="mt-3">
@@ -159,7 +173,7 @@ function HourlyChart({ hourly }: { hourly: Record<string, string | number>[] }) 
         Snowfall by hour
       </p>
       <ResponsiveContainer width="100%" height={110}>
-        <BarChart data={hourly} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+        <BarChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#ece6da" vertical={false} />
           <XAxis
             dataKey="t"
@@ -185,22 +199,45 @@ function HourlyChart({ hourly }: { hourly: Record<string, string | number>[] }) 
                 hour: 'numeric', hour12: true,
               })
             }
-            formatter={(v: number, name: string) => [
-              `${v.toFixed(2)}″`,
-              SOURCE_LABEL[name] ?? name,
-            ]}
+            formatter={(v: number, name: string) => {
+              const src = name.replace(/:est$|:pred$/, '');
+              const label = SOURCE_LABEL[src] ?? src;
+              const suffix = name.endsWith(':est') ? ' (fallen)' : ' (predicted)';
+              return [`${v.toFixed(2)}″`, label + suffix];
+            }}
           />
           {[...sources].map(src => (
-            <Bar
-              key={src}
-              dataKey={src}
+            hasEstimated && <Bar
+              key={src + ':est'}
+              dataKey={src + ':est'}
               fill={SOURCE_COLOR[src] ?? '#8884d8'}
-              opacity={0.85}
+              opacity={1}
+              radius={[2, 2, 0, 0]}
+            />
+          ))}
+          {[...sources].map(src => (
+            hasPredicted && <Bar
+              key={src + ':pred'}
+              dataKey={src + ':pred'}
+              fill={SOURCE_COLOR[src] ?? '#8884d8'}
+              opacity={0.45}
               radius={[2, 2, 0, 0]}
             />
           ))}
         </BarChart>
       </ResponsiveContainer>
+      {hasEstimated && hasPredicted && (
+        <div className="flex gap-3 mt-1">
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-2 rounded-sm bg-[#3b82f6]" />
+            <span className="text-[10px] text-[#9e9890]">Fallen</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-2 rounded-sm bg-[#3b82f6] opacity-45" />
+            <span className="text-[10px] text-[#9e9890]">Predicted</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -210,6 +247,7 @@ function HourlyChart({ hourly }: { hourly: Record<string, string | number>[] }) 
 interface SnowMapProps {
   points: SnowPoint[];
   fetchedAt: string | null;
+  initialView?: { longitude: number; latitude: number; zoom: number };
 }
 
 function findNearest(lat: number, lon: number, pts: SnowPoint[]): SnowPoint | null {
@@ -225,7 +263,7 @@ function findNearest(lat: number, lon: number, pts: SnowPoint[]): SnowPoint | nu
 
 interface GeoResult { place_name: string; center: [number, number] }
 
-export function SnowMap({ points, fetchedAt }: SnowMapProps) {
+export function SnowMap({ points, fetchedAt, initialView }: SnowMapProps) {
   const mapTilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '';
   const mapRef = useRef<MapRef>(null);
   const [popup, setPopup] = useState<PopupState | null>(null);
@@ -367,14 +405,16 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       const json   = await res.json();
       const series: DriftSeries[] = json.series ?? [];
       const hourly: Record<string, string | number>[] = json.hourly ?? [];
-      let latestSnowIn: number | undefined;
-      if (series.length > 0) {
-        const allPoints = series.flatMap(s => s.points);
-        if (allPoints.length > 0) {
-          const latest = allPoints.reduce((a, b) => a.fetchedAt > b.fetchedAt ? a : b);
-          latestSnowIn = latest.snowIn;
-        }
-      }
+      const estimatedIn: Record<string, number> = json.estimatedIn ?? {};
+      const predictedIn: Record<string, number> = json.predictedIn ?? {};
+
+      // Storm total = estimated fallen + predicted remaining (use open-meteo as primary).
+      let stormTotal: number | undefined;
+      const primarySrc = 'open-meteo';
+      const fallen    = estimatedIn[primarySrc] ?? 0;
+      const remaining = predictedIn[primarySrc] ?? 0;
+      stormTotal = Math.round((fallen + remaining) * 100) / 100;
+
       setPopup(prev => {
         if (prev?.locationId !== locationId) return prev;
         return {
@@ -382,7 +422,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
           drift: series,
           hourly,
           driftLoading: false,
-          ...(latestSnowIn !== undefined && { snowIn: latestSnowIn }),
+          ...(stormTotal !== undefined && { snowIn: stormTotal }),
         };
       });
     } catch {
@@ -452,7 +492,7 @@ export function SnowMap({ points, fetchedAt }: SnowMapProps) {
       ) : null}
       {mapStyle && <Map
         ref={mapRef}
-        initialViewState={{ longitude: -96, latitude: 38.5, zoom: 3.8 }}
+        initialViewState={initialView ?? { longitude: -96, latitude: 38.5, zoom: 3.8 }}
         style={{ width: '100%', height: '100%' }}
         mapStyle={mapStyle}
         interactiveLayerIds={['snow-fill']}
