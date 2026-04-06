@@ -29,27 +29,6 @@ interface StateEntry {
 // Single snow color — no severity shading at the state level.
 const SNOW_COLOR = '#3a86ff';
 
-// Mock data for preview when no real data is available.
-const MOCK_STATES: Record<string, StateSummary> = {
-  CO: { maxSnowIn: 14, pointCount: 5 },
-  WY: { maxSnowIn: 8, pointCount: 3 },
-  MT: { maxSnowIn: 6, pointCount: 4 },
-  UT: { maxSnowIn: 18, pointCount: 6 },
-  MN: { maxSnowIn: 4, pointCount: 2 },
-  WI: { maxSnowIn: 3, pointCount: 2 },
-  ME: { maxSnowIn: 7, pointCount: 3 },
-  VT: { maxSnowIn: 10, pointCount: 2 },
-  NH: { maxSnowIn: 9, pointCount: 2 },
-  NY: { maxSnowIn: 5, pointCount: 3 },
-  MI: { maxSnowIn: 2, pointCount: 1 },
-  ID: { maxSnowIn: 11, pointCount: 3 },
-  WA: { maxSnowIn: 1, pointCount: 1 },
-  OR: { maxSnowIn: 3, pointCount: 2 },
-  ND: { maxSnowIn: 26, pointCount: 4 },
-  SD: { maxSnowIn: 4, pointCount: 2 },
-  PA: { maxSnowIn: 2, pointCount: 1 },
-  MA: { maxSnowIn: 5, pointCount: 2 },
-};
 
 export function StateMap() {
   const router = useRouter();
@@ -85,20 +64,18 @@ export function StateMap() {
             <feDropShadow dx="0" dy="4" stdDeviation="8" floodColor="#4a7eaa" floodOpacity="0.2" />
           </filter>
 
-          {/* Snowflake symbol — simple 6-spoke icon */}
-          <symbol id="flake" viewBox="0 0 20 20">
-            <g stroke="rgba(255,255,255,0.3)" strokeWidth="1.4" strokeLinecap="round" fill="none">
-              <line x1="10" y1="2" x2="10" y2="18" />
-              <line x1="3.07" y1="6" x2="16.93" y2="14" />
-              <line x1="3.07" y1="14" x2="16.93" y2="6" />
-            </g>
-            <circle cx="10" cy="10" r="1.5" fill="rgba(255,255,255,0.25)" />
+          {/* Google Material snowflake icon */}
+          <symbol id="flake" viewBox="0 -960 960 960">
+            <path
+              fill="rgba(255,255,255,0.22)"
+              d="M450-80v-95l-73 62-39-46 112-94v-175l-151 87-26 145-59-11 17-94-82 47-30-52 82-47-90-33 20-56 138 49 150-87-150-86-138 49-20-56 90-33-82-48 30-52 82 48-17-94 59-11 26 145 151 87v-175l-112-94 39-46 73 62v-96h60v96l72-62 39 46-111 94v175l150-87 26-145 59 11-17 94 82-47 30 53-82 46 90 33-20 56-138-49-150 86 150 87 138-49 20 56-90 33 83 47-30 52-83-47 17 94-59 11-26-145-150-87v175l111 94-39 46-72-62v95h-60Z"
+            />
           </symbol>
 
-          {/* Single tiled snowflake pattern — big flakes, slight rotation */}
-          <pattern id="snowflakes" width="50" height="50" patternUnits="userSpaceOnUse" patternTransform="rotate(12)">
-            <use href="#flake" x="5" y="5" width="22" height="22" />
-            <use href="#flake" x="32" y="30" width="16" height="16" />
+          {/* Tiled snowflake pattern */}
+          <pattern id="snowflakes" width="60" height="60" patternUnits="userSpaceOnUse" patternTransform="rotate(8)">
+            <use href="#flake" x="5" y="5" width="26" height="26" />
+            <use href="#flake" x="38" y="36" width="18" height="18" />
           </pattern>
         </defs>
 
@@ -121,7 +98,7 @@ export function StateMap() {
           {/* States */}
           {states.map(state => {
             // Use real data if available, fall back to mock for preview.
-            const summary = data?.states[state.abbr.toLowerCase()] ?? data?.states[state.abbr] ?? MOCK_STATES[state.abbr];
+            const summary = data?.states[state.abbr.toLowerCase()] ?? data?.states[state.abbr];
             const hasSnow = summary && summary.maxSnowIn > 0;
             const isHovered = hovered === state.abbr;
             const fill = hasSnow ? SNOW_COLOR : '#ffffff';
@@ -166,7 +143,7 @@ export function StateMap() {
                     y={state.labelY}
                     textAnchor="middle"
                     dominantBaseline="central"
-                    fontSize={10}
+                    fontSize={12}
                     fontWeight={800}
                     fill={
                       isHovered ? '#4a4539'
@@ -184,20 +161,6 @@ export function StateMap() {
                     {state.abbr}
                   </text>
                 )}
-                {!state.external && hasSnow && !isHovered && (
-                  <text
-                    x={state.labelX}
-                    y={state.labelY + 12}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    fontSize={7}
-                    fontWeight={700}
-                    fill="rgba(255,255,255,0.8)"
-                    style={{ pointerEvents: 'none', userSelect: 'none' }}
-                  >
-                    {summary.maxSnowIn.toFixed(0)}″
-                  </text>
-                )}
               </g>
             );
           })}
@@ -205,7 +168,7 @@ export function StateMap() {
 
         {/* External labels */}
         {states.filter(s => s.external).map(state => {
-          const summary = data?.states[state.abbr.toLowerCase()] ?? data?.states[state.abbr] ?? MOCK_STATES[state.abbr];
+          const summary = data?.states[state.abbr.toLowerCase()] ?? data?.states[state.abbr];
           const hasSnow = summary && summary.maxSnowIn > 0;
           const isHovered = hovered === state.abbr;
           const color = isHovered ? '#4a4539' : hasSnow ? SNOW_COLOR : '#7eaed4';
@@ -230,7 +193,7 @@ export function StateMap() {
                 y={state.labelY}
                 textAnchor="start"
                 dominantBaseline="central"
-                fontSize={9}
+                fontSize={10}
                 fontWeight={isHovered ? 800 : 700}
                 fill={color}
                 style={{

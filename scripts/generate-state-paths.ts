@@ -96,18 +96,15 @@ async function main() {
   // Manual label overrides — nudge labels to better visual positions.
   // Offsets are in SVG coordinates (960×600 viewBox, Albers projection).
   const LABEL_OVERRIDES: Record<string, { x: number; y: number; external?: boolean }> = {
-    // Florida — centered in the peninsula (bounds: 653-816, 460-601)
-    FL: { x: 760, y: 530 },
-    // Michigan — center on lower peninsula
-    MI: { x: 720, y: 230 },
-    // Louisiana — nudge out of coastline
-    LA: { x: 620, y: 440 },
-    // Idaho — centered in body (bounds: 141-249, 31-205)
-    ID: { x: 192, y: 130 },
-    // California — nudge right from far-left centroid (bounds: 11-155, 155-402)
-    CA: { x: 95, y: 300 },
+    // States where the geometric centroid lands in a bad spot.
+    FL: { x: 777, y: 517 },
+    MI: { x: 671, y: 185 },
+    CA: { x: 62, y: 283 },
+    ID: { x: 186, y: 148 },
+    LA: { x: 555, y: 469 },
+    OK: { x: 445, y: 378 },   // bbox center, not pulled by panhandle
 
-    // Tiny NE states — stacked in the "ocean", pushed out to avoid MA shape.
+    // Tiny NE states — stacked in the "ocean".
     VT: { x: 945, y: 148, external: true },
     NH: { x: 945, y: 163, external: true },
     MA: { x: 945, y: 178, external: true },
