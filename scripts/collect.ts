@@ -25,6 +25,12 @@ const BATCH_SIZE  = 500;
 const PAUSE_MS    = process.env.OPEN_METEO_KEY ? 2_000 : 35_000; // 2s with key, 35s without
 const RECOVERY_MS = 10_000;
 
+// ── DB write safety caps ────────────────────────────────────────────────────
+// Hard limits to prevent runaway costs on Neon (no built-in spend cap).
+const MAX_ROWS_PER_MODEL   = 50_000;  // per model per run — enough for a major storm
+const MAX_TOTAL_ROWS       = 120_000; // across all models + NWS in one run
+const MAX_SNAPSHOT_ROWS    = 5_000_000; // abort if table exceeds this (steady state ~2-3M)
+
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 /** 7-day window boundaries used for map aggregation. */
@@ -94,6 +100,12 @@ async function collectModel(
       }
 
       console.log(`[collect:${source}] batch ${i + 1}/${batches.length} — ${rows.length} rows`);
+
+      // Safety cap: stop inserting if we've hit the per-model limit.
+      if (totalRows >= MAX_ROWS_PER_MODEL) {
+        console.warn(`[collect:${source}] hit per-model cap of ${MAX_ROWS_PER_MODEL} rows — stopping early`);
+        break;
+      }
     } catch (e) {
       errors++;
       console.error(`[collect:${source}] batch ${i + 1} error:`, e);
@@ -121,6 +133,16 @@ async function main() {
 
   await sql`DELETE FROM forecast_snapshots WHERE fetched_at < NOW() - INTERVAL '7 days'`;
   await sql`DELETE FROM storms WHERE window_end < NOW()`;
+
+  // Safety check: abort if the table is already too large.
+  const [{ count: snapshotCount }] = await sql`
+    SELECT COUNT(*)::integer AS count FROM forecast_snapshots
+  ` as { count: number }[];
+  console.log(`[collect] forecast_snapshots row count: ${snapshotCount}`);
+  if (snapshotCount > MAX_SNAPSHOT_ROWS) {
+    console.error(`[collect] snapshot table exceeds ${MAX_SNAPSHOT_ROWS} rows — aborting to protect DB costs`);
+    process.exit(1);
+  }
 
   const fetchedAt = new Date().toISOString();
   const window    = mapWindow();
@@ -164,10 +186,13 @@ async function main() {
   console.log(`[collect] map cache — ${mapPoints.length} points with snow`);
 
   // ── NWS ────────────────────────────────────────────────────────────────────
+  const totalRowsSoFar = gfs.totalRows + ecmwf.totalRows;
   const allSnowyIds = new Set([...gfs.snowyIds, ...ecmwf.snowyIds]);
-  if (allSnowyIds.size > 0) {
+  if (allSnowyIds.size > 0 && totalRowsSoFar < MAX_TOTAL_ROWS) {
     const nwsRows = await collectNWSForSnowyLocations([...allSnowyIds], fetchedAt);
     console.log(`[collect] nws — ${nwsRows} rows inserted`);
+  } else if (totalRowsSoFar >= MAX_TOTAL_ROWS) {
+    console.warn(`[collect] skipping NWS — already at ${totalRowsSoFar} rows (cap: ${MAX_TOTAL_ROWS})`);
   }
 
   // ── Storm detection ────────────────────────────────────────────────────────

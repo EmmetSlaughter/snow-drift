@@ -28,6 +28,12 @@ interface Storm {
 interface DriftPoint  { fetchedAt: string; snowIn: number }
 interface DriftSeries { source: string; points: DriftPoint[] }
 
+interface BloopHour {
+  t: string;
+  snowIn: number;
+  kind: string;
+}
+
 interface SelectedPoint {
   locationId: number;
   lat: number;
@@ -39,6 +45,10 @@ interface SelectedPoint {
   selectedStormId: number | null;
   drift: DriftSeries[] | null;
   hourly: Record<string, string | number>[] | null;
+  bloopcast: BloopHour[] | null;
+  bloopTotal: number | null;
+  confidence: number | null;
+  hourlyView: 'bloop' | string; // 'bloop' or a source name
   loading: boolean;
 }
 
@@ -98,11 +108,14 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
 
   const [selected, setSelected] = useState<SelectedPoint | null>(null);
 
-  // Project all snow points to SVG coordinates.
-  const projected = points.map(p => {
-    const [x, y] = albersProject(p.lon, p.lat);
-    return { ...p, svgX: x, svgY: y };
-  });
+  // Project all snow points to SVG coordinates (memoized to avoid recomputing contours).
+  const projected = useMemo(() =>
+    points.map(p => {
+      const [x, y] = albersProject(p.lon, p.lat);
+      return { ...p, svgX: x, svgY: y };
+    }),
+    [points],
+  );
 
   // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -110,7 +123,9 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
     setSelected({
       locationId: pt.locationId, lat: pt.lat, lon: pt.lon, snowIn: pt.snowIn,
       svgX: pt.svgX, svgY: pt.svgY,
-      storms: null, selectedStormId: null, drift: null, hourly: null, loading: true,
+      storms: null, selectedStormId: null, drift: null, hourly: null,
+      bloopcast: null, bloopTotal: null, confidence: null,
+      hourlyView: 'bloop', loading: true,
     });
     try {
       const res = await fetch(`/api/storms?locationId=${pt.locationId}`);
@@ -140,6 +155,9 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
           ...prev,
           drift: json.series ?? [],
           hourly: json.hourly ?? [],
+          bloopcast: json.bloopcast ?? [],
+          bloopTotal: json.bloopTotal ?? null,
+          confidence: json.confidence ?? null,
           loading: false,
         };
       });
@@ -180,35 +198,35 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
     const w = detail.svgWidth + pad * 2;
     const h = detail.svgHeight + pad * 2;
 
-    // Grid resolution — higher = smoother but slower
-    const cols = Math.min(200, Math.round(w));
-    const rows = Math.min(200, Math.round(h));
+    // Grid resolution — keep low for performance. 60×60 = 3,600 cells.
+    const cols = Math.min(60, Math.round(w / 3));
+    const rows = Math.min(60, Math.round(h / 3));
     const cellW = w / cols;
     const cellH = h / rows;
 
-    // Build the grid with inverse distance weighting interpolation.
+    // Pre-compute point positions for fast lookup.
+    const ptX = projected.map(p => p.svgX);
+    const ptY = projected.map(p => p.svgY);
+    const ptV = projected.map(p => p.snowIn);
+    const n = projected.length;
+
+    // IDW power=2 (simple, fast — no sorting needed).
+    // Use a distance cutoff so far-away points don't dilute.
+    const cutoff2 = (Math.max(w, h) * 0.4) ** 2;
     const values = new Float64Array(cols * rows);
-    const pts = projected.map(p => ({ x: p.svgX, y: p.svgY, v: p.snowIn }));
 
     for (let j = 0; j < rows; j++) {
+      const gy = y0 + (j + 0.5) * cellH;
       for (let i = 0; i < cols; i++) {
         const gx = x0 + (i + 0.5) * cellW;
-        const gy = y0 + (j + 0.5) * cellH;
-
         let weightSum = 0;
         let valSum = 0;
-        // Use IDW with power=3 for sharper peaks (power=2 is too smooth).
-        // Also limit to nearest 8 points to avoid distant points diluting values.
-        const gx2 = gx, gy2 = gy;
-        const dists = pts.map(p => ({
-          v: p.v,
-          d2: (gx2 - p.x) ** 2 + (gy2 - p.y) ** 2,
-        })).sort((a, b) => a.d2 - b.d2).slice(0, 8);
-
-        for (const { v, d2 } of dists) {
-          const weight = 1 / (d2 ** 1.5 + 0.001); // power=3 (d^2 raised to 1.5)
+        for (let k = 0; k < n; k++) {
+          const d2 = (gx - ptX[k]) ** 2 + (gy - ptY[k]) ** 2;
+          if (d2 > cutoff2) continue;
+          const weight = 1 / (d2 + 0.1);
           weightSum += weight;
-          valSum += weight * v;
+          valSum += weight * ptV[k];
         }
         values[j * cols + i] = weightSum > 0 ? valSum / weightSum : 0;
       }
@@ -371,14 +389,32 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
             ← close
           </button>
 
+          {/* Hero — BloopCast total + confidence */}
           <div className="flex items-baseline gap-1.5 mb-1">
             <span className="text-4xl font-black text-[#3a86ff] leading-none tabular-nums">
-              {selected.snowIn.toFixed(1)}
+              {(selected.bloopTotal ?? selected.snowIn).toFixed(1)}
             </span>
             <span className="text-xl font-bold text-[#a5d8ff] leading-none">″</span>
           </div>
-          <p className="text-[11px] text-[#7eaed4] mb-4">
+          {selected.confidence !== null && (
+            <div className="flex items-center gap-2 mb-1">
+              <div className="flex-1 h-1.5 bg-[#e8f4ff] rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${selected.confidence}%`,
+                    backgroundColor: selected.confidence >= 70 ? '#12b886' : selected.confidence >= 40 ? '#f59f00' : '#e03131',
+                  }}
+                />
+              </div>
+              <span className="text-[10px] font-bold text-[#7eaed4]">{selected.confidence}%</span>
+            </div>
+          )}
+          <p className="text-[11px] text-[#7eaed4] mb-1">
             {selected.lat.toFixed(2)}°N · {Math.abs(selected.lon).toFixed(2)}°W
+          </p>
+          <p className="text-[9px] text-[#a5d8ff] font-semibold uppercase tracking-wider mb-4">
+            BloopCast
           </p>
 
           {/* Storms */}
@@ -414,47 +450,109 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
             <p className="text-xs text-[#7eaed4] animate-pulse mt-2">Loading…</p>
           )}
 
-          {/* Hourly chart */}
-          {!selected.loading && selected.hourly && selected.hourly.length > 0 && (
+          {/* Hourly chart — BloopCast default, toggleable to individual sources */}
+          {!selected.loading && (selected.bloopcast?.length ?? 0) > 0 && (
             <div className="mt-2">
-              <p className="text-[10px] text-[#7eaed4] mb-1 font-bold uppercase tracking-widest">
-                Snowfall by hour
-              </p>
+              <div className="flex items-center gap-2 mb-1">
+                <p className="text-[10px] text-[#7eaed4] font-bold uppercase tracking-widest">
+                  Snowfall by hour
+                </p>
+                <div className="flex gap-1 ml-auto">
+                  <button
+                    onClick={() => setSelected(prev => prev ? { ...prev, hourlyView: 'bloop' } : prev)}
+                    className={`text-[8px] font-bold px-2 py-0.5 rounded-full transition-all ${
+                      selected.hourlyView === 'bloop'
+                        ? 'bg-[#3a86ff] text-white'
+                        : 'bg-[#e8f4ff] text-[#7eaed4] hover:bg-[#d0e8ff]'
+                    }`}
+                  >
+                    Bloop
+                  </button>
+                  {(selected.drift ?? []).map(s => (
+                    <button
+                      key={s.source}
+                      onClick={() => setSelected(prev => prev ? { ...prev, hourlyView: s.source } : prev)}
+                      className={`text-[8px] font-bold px-2 py-0.5 rounded-full transition-all ${
+                        selected.hourlyView === s.source
+                          ? 'text-white'
+                          : 'bg-[#e8f4ff] text-[#7eaed4] hover:bg-[#d0e8ff]'
+                      }`}
+                      style={selected.hourlyView === s.source ? { backgroundColor: SOURCE_COLOR[s.source] ?? '#3a86ff' } : {}}
+                    >
+                      {SOURCE_LABEL[s.source] ?? s.source}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <ResponsiveContainer width="100%" height={110}>
-                <BarChart data={selected.hourly} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" vertical={false} />
-                  <XAxis
-                    dataKey="t"
-                    tickFormatter={(iso: string) =>
-                      new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
-                    }
-                    tick={{ fontSize: 8, fill: '#7eaed4' }}
-                    minTickGap={30}
-                  />
-                  <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff', border: '1px solid #d0dcea',
-                      borderRadius: 12, fontSize: 11,
-                    }}
-                    labelFormatter={(iso: string) => fmtTick(iso)}
-                    formatter={(v: number, name: string) => [
-                      `${v.toFixed(2)}″`,
-                      SOURCE_LABEL[name.replace(/:est$|:pred$/, '')] ?? name,
-                    ]}
-                  />
-                  {Object.keys(selected.hourly[0] ?? {})
-                    .filter(k => k !== 't' && k !== 'kind')
-                    .map(src => (
+                {selected.hourlyView === 'bloop' ? (
+                  <BarChart data={selected.bloopcast ?? []} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" vertical={false} />
+                    <XAxis
+                      dataKey="t"
+                      tickFormatter={(iso: string) =>
+                        new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
+                      }
+                      tick={{ fontSize: 8, fill: '#7eaed4' }}
+                      minTickGap={30}
+                    />
+                    <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#fff', border: '1px solid #d0dcea',
+                        borderRadius: 12, fontSize: 11,
+                      }}
+                      labelFormatter={(iso: string) => fmtTick(iso)}
+                      formatter={(v: number) => [`${v.toFixed(2)}″`, 'BloopCast']}
+                    />
+                    <Bar
+                      dataKey="snowIn"
+                      fill="#3a86ff"
+                      opacity={0.85}
+                      radius={[2, 2, 0, 0]}
+                    />
+                  </BarChart>
+                ) : (
+                  <BarChart
+                    data={(selected.hourly ?? []).filter(h => {
+                      // Show entries that have data for the selected source
+                      const src = selected.hourlyView;
+                      return h[src] !== undefined || h[`${src}:est`] !== undefined || h[`${src}:pred`] !== undefined;
+                    })}
+                    margin={{ top: 4, right: 8, left: -16, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" vertical={false} />
+                    <XAxis
+                      dataKey="t"
+                      tickFormatter={(iso: string) =>
+                        new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
+                      }
+                      tick={{ fontSize: 8, fill: '#7eaed4' }}
+                      minTickGap={30}
+                    />
+                    <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#fff', border: '1px solid #d0dcea',
+                        borderRadius: 12, fontSize: 11,
+                      }}
+                      labelFormatter={(iso: string) => fmtTick(iso)}
+                      formatter={(v: number, name: string) => [
+                        `${v.toFixed(2)}″`,
+                        SOURCE_LABEL[selected.hourlyView] ?? selected.hourlyView,
+                      ]}
+                    />
+                    {[`${selected.hourlyView}:est`, `${selected.hourlyView}:pred`, selected.hourlyView].map(key => (
                       <Bar
-                        key={src}
-                        dataKey={src}
-                        fill={SOURCE_COLOR[src.replace(/:est$|:pred$/, '')] ?? '#3a86ff'}
-                        opacity={src.endsWith(':pred') ? 0.45 : 0.85}
+                        key={key}
+                        dataKey={key}
+                        fill={SOURCE_COLOR[selected.hourlyView] ?? '#3a86ff'}
+                        opacity={key.endsWith(':pred') ? 0.45 : 0.85}
                         radius={[2, 2, 0, 0]}
                       />
                     ))}
-                </BarChart>
+                  </BarChart>
+                )}
               </ResponsiveContainer>
             </div>
           )}

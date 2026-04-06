@@ -16,6 +16,8 @@ export const maxDuration = 60;
 
 const OM_BATCH_SIZE = 500;
 const OM_PAUSE_MS   = 2000;
+const MAX_ROWS_PER_RUN   = 50_000;
+const MAX_SNAPSHOT_ROWS  = 5_000_000;
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -44,6 +46,16 @@ export async function GET(req: NextRequest) {
   // ── Prune old data ─────────────────────────────────────────────────────────
   await sql`DELETE FROM forecast_snapshots WHERE fetched_at < NOW() - INTERVAL '7 days'`;
   await sql`DELETE FROM storms WHERE window_end < NOW()`;
+
+  // Safety: abort if table is already too large.
+  const [{ count: snapshotCount }] = await sql`
+    SELECT COUNT(*)::integer AS count FROM forecast_snapshots
+  ` as { count: number }[];
+  if (snapshotCount > MAX_SNAPSHOT_ROWS) {
+    return NextResponse.json({
+      error: `Snapshot table has ${snapshotCount} rows (cap: ${MAX_SNAPSHOT_ROWS}) — skipping to protect DB costs`,
+    }, { status: 429 });
+  }
 
   // ── Chunk locations into batches ──────────────────────────────────────────
   const batches: typeof locations[] = [];
@@ -91,6 +103,10 @@ export async function GET(req: NextRequest) {
           unnest(${cms}::double precision[])
       `;
       totalRows += rows.length;
+      if (totalRows >= MAX_ROWS_PER_RUN) {
+        console.warn(`[cron] hit per-run cap of ${MAX_ROWS_PER_RUN} rows — stopping early`);
+        break;
+      }
     } catch (e) {
       batchErrors++;
       if (sampleErrors.length < 3) sampleErrors.push(String(e));

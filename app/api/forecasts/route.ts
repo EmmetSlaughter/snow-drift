@@ -138,7 +138,6 @@ export async function GET(req: NextRequest) {
   );
 
   // ── Storm totals ──────────────────────────────────────────────────────────
-  // Provide a convenience total: estimated fallen + predicted remaining.
   const estimatedIn: Record<string, number> = {};
   const predictedIn: Record<string, number> = {};
   for (const entry of hourly) {
@@ -149,5 +148,92 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ series, hourly, windowStart, windowEnd, estimatedIn, predictedIn });
+  // ── BloopCast — weighted average + confidence ────────────────────────────
+  // Source weights: GFS (open-meteo) is the workhorse, ECMWF is high-res
+  // global, NWS is regional but authoritative.
+  const SOURCE_WEIGHT: Record<string, number> = {
+    'open-meteo': 1.0,
+    'ecmwf':      0.9,
+    'nws':        0.8,
+  };
+
+  // Group raw hourly data by timestamp (merge estimated+predicted for same time).
+  const byTime = new Map<string, Record<string, number>>();
+  for (const entry of hourly) {
+    const t = entry.t as string;
+    if (!byTime.has(t)) byTime.set(t, {});
+    const bucket = byTime.get(t)!;
+    for (const [key, val] of Object.entries(entry)) {
+      if (key === 't' || key === 'kind') continue;
+      const src = key.replace(/:est$|:pred$/, '');
+      // Keep the value (estimated takes priority since it's "what fell")
+      if (bucket[src] === undefined) bucket[src] = val as number;
+    }
+  }
+
+  // Compute BloopCast per hour.
+  const bloopcast: { t: string; snowIn: number; kind: string }[] = [];
+  let totalBloop = 0;
+  const allDeviations: number[] = [];
+
+  for (const [t, sources] of byTime) {
+    const srcNames = Object.keys(sources);
+    if (srcNames.length === 0) continue;
+
+    let weightedSum = 0;
+    let weightTotal = 0;
+    const values: number[] = [];
+
+    for (const src of srcNames) {
+      const w = SOURCE_WEIGHT[src] ?? 0.5;
+      weightedSum += sources[src] * w;
+      weightTotal += w;
+      values.push(sources[src]);
+    }
+
+    const avg = weightTotal > 0 ? weightedSum / weightTotal : 0;
+    totalBloop += avg;
+
+    // Track deviation for confidence calculation.
+    if (values.length > 1) {
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      const variance = values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length;
+      allDeviations.push(Math.sqrt(variance));
+    }
+
+    // Determine kind: if this timestamp is in the past, it's estimated.
+    const isPast = new Date(t) < new Date(now);
+    bloopcast.push({
+      t,
+      snowIn: Math.round(avg * 100) / 100,
+      kind: isPast ? 'estimated' : 'predicted',
+    });
+  }
+
+  bloopcast.sort((a, b) => a.t.localeCompare(b.t));
+
+  // Confidence: 0-100. Based on model agreement (low std dev = high confidence)
+  // and number of sources (more sources = higher confidence).
+  const avgSourceCount = byTime.size > 0
+    ? Array.from(byTime.values()).reduce((sum, s) => sum + Object.keys(s).length, 0) / byTime.size
+    : 0;
+  const avgDeviation = allDeviations.length > 0
+    ? allDeviations.reduce((a, b) => a + b, 0) / allDeviations.length
+    : 0;
+
+  // Map deviation to confidence: 0 deviation → 95, high deviation → lower.
+  // Scale: stddev of 0.5″ → ~70 confidence, 2″ → ~30.
+  const deviationScore = Math.max(0, Math.min(100, 95 - avgDeviation * 30));
+  // Bonus for multiple sources: 1 source → 0 bonus, 3 sources → +5.
+  const sourceBonus = Math.min(5, (avgSourceCount - 1) * 2.5);
+  const confidence = Math.round(Math.min(99, deviationScore + sourceBonus));
+
+  totalBloop = Math.round(totalBloop * 100) / 100;
+
+  return NextResponse.json({
+    series, hourly, windowStart, windowEnd, estimatedIn, predictedIn,
+    bloopcast,
+    bloopTotal: totalBloop,
+    confidence,
+  });
 }
