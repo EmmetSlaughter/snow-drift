@@ -1,10 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from 'recharts';
+import { contours } from 'd3-contour';
+import { geoPath } from 'd3-geo';
 import detailPaths from '@/lib/state-detail-paths.json';
 import { albersProject } from '@/lib/albers';
 
@@ -153,26 +155,139 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
     fetchDrift(selected.locationId, stormId);
   }, [selected, fetchDrift]);
 
+  // ── Contour generation ────────────────────────────────────────────────────
+
+  const THRESHOLDS = [0.1, 1, 3, 6, 12, 24];
+  const COLORS = [
+    '#bde0fe', // 0.1 – 1″  (trace)
+    '#74b9ff', // 1 – 3″
+    '#3a86ff', // 3 – 6″
+    '#1e3a8a', // 6 – 12″
+    '#6741d9', // 12 – 24″
+    '#9c36b5', // 24″+
+  ];
+
+  const contourPaths = useMemo(() => {
+    if (!detail || projected.length === 0) return [];
+
+    // Build a rasterized grid in SVG coordinate space.
+    // We need to cover the state's bounding box with a pixel grid,
+    // interpolate snow values, then run d3-contour on it.
+
+    const pad = 5;
+    const x0 = detail.svgMinX - pad;
+    const y0 = detail.svgMinY - pad;
+    const w = detail.svgWidth + pad * 2;
+    const h = detail.svgHeight + pad * 2;
+
+    // Grid resolution — higher = smoother but slower
+    const cols = Math.min(200, Math.round(w));
+    const rows = Math.min(200, Math.round(h));
+    const cellW = w / cols;
+    const cellH = h / rows;
+
+    // Build the grid with inverse distance weighting interpolation.
+    const values = new Float64Array(cols * rows);
+    const pts = projected.map(p => ({ x: p.svgX, y: p.svgY, v: p.snowIn }));
+
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const gx = x0 + (i + 0.5) * cellW;
+        const gy = y0 + (j + 0.5) * cellH;
+
+        let weightSum = 0;
+        let valSum = 0;
+        // Use IDW with power=3 for sharper peaks (power=2 is too smooth).
+        // Also limit to nearest 8 points to avoid distant points diluting values.
+        const gx2 = gx, gy2 = gy;
+        const dists = pts.map(p => ({
+          v: p.v,
+          d2: (gx2 - p.x) ** 2 + (gy2 - p.y) ** 2,
+        })).sort((a, b) => a.d2 - b.d2).slice(0, 8);
+
+        for (const { v, d2 } of dists) {
+          const weight = 1 / (d2 ** 1.5 + 0.001); // power=3 (d^2 raised to 1.5)
+          weightSum += weight;
+          valSum += weight * v;
+        }
+        values[j * cols + i] = weightSum > 0 ? valSum / weightSum : 0;
+      }
+    }
+
+    // Generate contours.
+    const contourGen = contours()
+      .size([cols, rows])
+      .thresholds(THRESHOLDS);
+
+    const bands = contourGen(Array.from(values));
+
+    // Create a transform that maps grid coordinates [0..cols, 0..rows]
+    // back to SVG coordinates.
+    const pathGen = geoPath().projection({
+      stream: (output) => ({
+        point(px: number, py: number) {
+          output.point(x0 + px * cellW, y0 + py * cellH);
+        },
+        sphere() { output.sphere?.(); },
+        lineStart() { output.lineStart(); },
+        lineEnd() { output.lineEnd(); },
+        polygonStart() { output.polygonStart(); },
+        polygonEnd() { output.polygonEnd(); },
+      }),
+    });
+
+    return bands.map((band, idx) => ({
+      d: pathGen(band) ?? '',
+      color: COLORS[idx] ?? COLORS[COLORS.length - 1],
+      threshold: band.value,
+    }));
+  }, [detail, projected]);
+
   if (!detail) return <div className="text-center py-10 text-[#7eaed4]">State not found</div>;
 
-  // Add some padding to the viewBox
   const vb = `${detail.svgMinX} ${detail.svgMinY} ${detail.svgWidth} ${detail.svgHeight}`;
 
-  // Scale dot radius relative to the viewBox so they look good at any state size.
-  const dotR = Math.max(2, Math.min(detail.svgWidth, detail.svgHeight) * 0.012);
+  // Find nearest grid point to a click for loading storm data.
+  const handleMapClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = e.currentTarget;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const svgPt = pt.matrixTransform(svg.getScreenCTM()?.inverse());
+    const clickX = svgPt.x;
+    const clickY = svgPt.y;
+
+    // Find nearest projected point.
+    let best = projected[0];
+    let bestD = Infinity;
+    for (const p of projected) {
+      const d = (p.svgX - clickX) ** 2 + (p.svgY - clickY) ** 2;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (best) fetchStorms(best);
+  }, [projected, fetchStorms]);
 
   return (
-    <div className="flex h-full bg-[#dbeefe]">
+    <div className="flex h-full bg-white">
       {/* Map area */}
       <div className="flex-1 relative">
-        <svg viewBox={vb} className="w-full h-full" preserveAspectRatio="xMidYMid meet">
+        <svg
+          viewBox={vb}
+          className="w-full h-full cursor-pointer"
+          preserveAspectRatio="xMidYMid meet"
+          onClick={handleMapClick}
+        >
           <defs>
             <filter id="state-shadow-detail" x="-3%" y="-2%" width="106%" height="108%">
               <feDropShadow dx="0" dy="2" stdDeviation="4" floodColor="#4a7eaa" floodOpacity="0.15" />
             </filter>
+            {/* Clip contours to state shape */}
+            <clipPath id="state-clip">
+              <path d={detail.path} />
+            </clipPath>
           </defs>
 
-          {/* State shape */}
+          {/* State shape background */}
           <path
             d={detail.path}
             fill="#ffffff"
@@ -182,41 +297,52 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
             filter="url(#state-shadow-detail)"
           />
 
-          {/* Snow dots */}
-          {projected.map(pt => {
-            const isSelected = selected?.locationId === pt.locationId;
-            return (
-              <circle
-                key={pt.locationId}
-                cx={pt.svgX}
-                cy={pt.svgY}
-                r={isSelected ? dotR * 1.5 : dotR}
-                fill={isSelected ? '#f76707' : '#3a86ff'}
-                fillOpacity={isSelected ? 1 : 0.7}
-                stroke="#ffffff"
-                strokeWidth={isSelected ? 1.5 : 0.5}
-                className="cursor-pointer"
-                style={{ transition: 'r 0.15s ease, fill 0.15s ease' }}
-                onClick={() => fetchStorms(pt)}
+          {/* Contour bands — clipped to state */}
+          <g clipPath="url(#state-clip)">
+            {contourPaths.map((band, i) => (
+              <path
+                key={i}
+                d={band.d}
+                fill={band.color}
+                fillOpacity={0.8}
+                stroke="none"
               />
-            );
-          })}
+            ))}
+          </g>
 
-          {/* Snow amount labels on dots */}
-          {projected.filter(p => p.snowIn >= 1).map(pt => (
-            <text
-              key={`lbl-${pt.locationId}`}
-              x={pt.svgX}
-              y={pt.svgY - dotR - 2}
-              textAnchor="middle"
-              fontSize={dotR * 1.8}
-              fontWeight={700}
-              fill="#3a86ff"
-              style={{ pointerEvents: 'none', userSelect: 'none' }}
-            >
-              {pt.snowIn.toFixed(0)}″
-            </text>
-          ))}
+          {/* State border on top */}
+          <path
+            d={detail.path}
+            fill="none"
+            stroke="#d0dcea"
+            strokeWidth={0.5}
+            strokeLinejoin="round"
+          />
+
+          {/* Selected point marker */}
+          {selected && (
+            <>
+              <circle
+                cx={selected.svgX}
+                cy={selected.svgY}
+                r={Math.min(detail.svgWidth, detail.svgHeight) * 0.015}
+                fill="#f76707"
+                stroke="#ffffff"
+                strokeWidth={1}
+              />
+              <text
+                x={selected.svgX}
+                y={selected.svgY - Math.min(detail.svgWidth, detail.svgHeight) * 0.022}
+                textAnchor="middle"
+                fontSize={Math.min(detail.svgWidth, detail.svgHeight) * 0.03}
+                fontWeight={800}
+                fill="#f76707"
+                style={{ pointerEvents: 'none', userSelect: 'none' }}
+              >
+                {selected.snowIn.toFixed(1)}″
+              </text>
+            </>
+          )}
         </svg>
 
         {/* Timestamp */}

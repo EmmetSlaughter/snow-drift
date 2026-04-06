@@ -11,7 +11,7 @@ const StateDetail = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="w-full h-full flex items-center justify-center bg-[#dbeefe] text-[#7eaed4] text-sm font-semibold">
+      <div className="w-full h-full flex items-center justify-center bg-white text-[#7eaed4] text-sm font-semibold">
         Loading…
       </div>
     ),
@@ -55,7 +55,7 @@ export default function StatePage() {
 
   if (!valid) {
     return (
-      <div className="h-screen flex flex-col items-center justify-center bg-[#dbeefe] text-[#4a4539]">
+      <div className="h-screen flex flex-col items-center justify-center bg-white text-[#4a4539]">
         <p className="text-lg font-bold mb-2">State not found</p>
         <Link href="/" className="text-sm text-[#3a86ff] hover:underline font-semibold">← Back to overview</Link>
       </div>
@@ -65,7 +65,7 @@ export default function StatePage() {
   const snowCount = points.filter(p => p.snowIn > 0).length;
 
   return (
-    <div className="flex flex-col h-screen bg-[#dbeefe]">
+    <div className="flex flex-col h-screen bg-white">
       <header className="flex-none flex items-center gap-3 px-5 py-3 bg-white/80 backdrop-blur-md border-b border-[#d0dcea] z-10">
         <Link
           href="/"
