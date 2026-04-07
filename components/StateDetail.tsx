@@ -417,12 +417,12 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
   // Keep the ref in sync.
   projectedGridRef.current = projectedGrid;
 
-  // Hit radius based on grid spacing.
+  // Hit radius — cover the full grid cell so there are no gaps between clickable areas.
   const hitRadius = useMemo(() => {
     if (gridPoints.length < 2) return 5;
     const [x1] = albersProject(gridPoints[0].lon, gridPoints[0].lat);
     const [x2] = albersProject(gridPoints[0].lon + 0.25, gridPoints[0].lat);
-    return Math.max(2, Math.abs(x2 - x1) * 0.55);
+    return Math.max(3, Math.abs(x2 - x1) * 0.75);
   }, [gridPoints]);
 
   return (
@@ -591,11 +591,30 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
               cx={gt.svgX}
               cy={gt.svgY}
               r={hitRadius}
-              fill="transparent"
-              className="cursor-pointer"
-              onClick={() => {
-                // Place marker at the grid point but reverse geocode from the grid lat/lon.
-                fetchStorms(gt, { svgX: gt.svgX, svgY: gt.svgY, lat: gt.lat, lon: gt.lon });
+              fill="rgba(0,0,0,0)"
+              style={{ cursor: 'pointer', pointerEvents: 'all' }}
+              onClick={(e) => {
+                // Get click position in SVG space using the circle's known position
+                // as a reference. The circle's bbox tells us where it actually rendered.
+                const circle = e.currentTarget;
+                const bbox = circle.getBoundingClientRect();
+                const circleCenterScreenX = bbox.left + bbox.width / 2;
+                const circleCenterScreenY = bbox.top + bbox.height / 2;
+                // Offset from circle center in screen pixels.
+                const offsetScreenX = e.clientX - circleCenterScreenX;
+                const offsetScreenY = e.clientY - circleCenterScreenY;
+                // Convert screen offset to SVG offset using the circle's known radius.
+                // bbox.width/2 in screen px = hitRadius in SVG units.
+                const screenToSvg = hitRadius / (bbox.width / 2);
+                const clickSvgX = gt.svgX + offsetScreenX * screenToSvg;
+                const clickSvgY = gt.svgY + offsetScreenY * screenToSvg;
+                // Reverse: approximate lat/lon from the SVG offset.
+                // This is rough but good enough for reverse geocoding municipality level.
+                const latPerSvgY = -0.25 / ((albersProject(gt.lon, gt.lat)[1] - albersProject(gt.lon, gt.lat + 0.25)[1]) || 1);
+                const lonPerSvgX = 0.25 / ((albersProject(gt.lon + 0.25, gt.lat)[0] - albersProject(gt.lon, gt.lat)[0]) || 1);
+                const clickLat = gt.lat + (clickSvgY - gt.svgY) * latPerSvgY;
+                const clickLon = gt.lon + (clickSvgX - gt.svgX) * lonPerSvgX;
+                fetchStorms(gt, { svgX: clickSvgX, svgY: clickSvgY, lat: clickLat, lon: clickLon });
               }}
             />
           ))}
