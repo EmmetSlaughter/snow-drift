@@ -1,10 +1,11 @@
 /**
  * GET /api/state-summary
  *
- * Returns max predicted snowfall per state from the map cache.
- * Used by the national overview to color state buttons by severity.
+ * Returns snow summary per state from the map cache.
+ * Uses percentage of grid points with ≥1″ to determine whether a state
+ * gets the "solid snow" treatment vs "trace" on the overview map.
  *
- * Response: { fetchedAt, states: { [abbr]: { maxSnowIn, pointCount } } }
+ * Response: { fetchedAt, states: { [abbr]: { maxSnowIn, pointCount, snowPct } } }
  */
 import { NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
@@ -34,17 +35,44 @@ export async function GET() {
     data: { locationId: number; lat: number; lon: number; snowIn: number }[];
   };
 
-  const stateSummary: Record<string, { maxSnowIn: number; pointCount: number }> = {};
+  // Count total grid points per state (from the locations table).
+  const allLocs = await sql`SELECT lat, lon FROM locations` as { lat: number; lon: number }[];
+
+  const totalByState: Record<string, number> = {};
+  for (const loc of allLocs) {
+    for (const abbr of assignStates(loc.lat, loc.lon)) {
+      totalByState[abbr] = (totalByState[abbr] ?? 0) + 1;
+    }
+  }
+
+  // Summarize snowy points per state.
+  const stateSummary: Record<string, {
+    maxSnowIn: number;
+    pointCount: number;   // points with any snow
+    points1in: number;    // points with ≥1″
+    totalPoints: number;  // total grid points in state
+    snowPct: number;      // % of points with ≥1″
+  }> = {};
 
   for (const pt of data) {
     const states = assignStates(pt.lat, pt.lon);
     for (const abbr of states) {
-      if (!stateSummary[abbr]) stateSummary[abbr] = { maxSnowIn: 0, pointCount: 0 };
-      if (pt.snowIn > stateSummary[abbr].maxSnowIn) {
-        stateSummary[abbr].maxSnowIn = pt.snowIn;
+      if (!stateSummary[abbr]) {
+        stateSummary[abbr] = {
+          maxSnowIn: 0, pointCount: 0, points1in: 0,
+          totalPoints: totalByState[abbr] ?? 1, snowPct: 0,
+        };
       }
-      stateSummary[abbr].pointCount++;
+      const s = stateSummary[abbr];
+      if (pt.snowIn > s.maxSnowIn) s.maxSnowIn = pt.snowIn;
+      s.pointCount++;
+      if (pt.snowIn >= 1) s.points1in++;
     }
+  }
+
+  // Compute snowPct.
+  for (const s of Object.values(stateSummary)) {
+    s.snowPct = Math.round((s.points1in / s.totalPoints) * 100);
   }
 
   return NextResponse.json(

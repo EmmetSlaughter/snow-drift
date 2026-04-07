@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -8,6 +8,7 @@ import {
 import { contours } from 'd3-contour';
 import { geoPath } from 'd3-geo';
 import detailPaths from '@/lib/state-detail-paths.json';
+import citiesData from '@/lib/us-cities.json';
 import { albersProject } from '@/lib/albers';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -116,6 +117,23 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
     }),
     [points],
   );
+
+  // ── Cities for this state ─────────────────────────────────────────────────
+  const cities = useMemo(() => {
+    if (!detail) return [];
+    const stateCities = (citiesData as { name: string; state: string; pop: number; lat: number; lon: number }[])
+      .filter(c => c.state.toLowerCase() === abbr.toLowerCase());
+
+    // Show top cities by population, scaled to state size.
+    // Larger states get more cities, smaller states get fewer.
+    const area = detail.svgWidth * detail.svgHeight;
+    const maxCities = Math.min(25, Math.max(5, Math.round(area / 2000)));
+
+    return stateCities.slice(0, maxCities).map(c => {
+      const [x, y] = albersProject(c.lon, c.lat);
+      return { ...c, svgX: x, svgY: y };
+    });
+  }, [abbr, detail]);
 
   // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -266,14 +284,24 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
   const vb = `${detail.svgMinX} ${detail.svgMinY} ${detail.svgWidth} ${detail.svgHeight}`;
 
   // Find nearest grid point to a click for loading storm data.
+  const svgRef = useRef<SVGSVGElement>(null);
+  const lastClickTime = useRef(0);
+
   const handleMapClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    const svg = e.currentTarget;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const svgPt = pt.matrixTransform(svg.getScreenCTM()?.inverse());
-    const clickX = svgPt.x;
-    const clickY = svgPt.y;
+    // Debounce — ignore clicks within 300ms of each other.
+    const now = Date.now();
+    if (now - lastClickTime.current < 300) return;
+    lastClickTime.current = now;
+
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    // Use SVG's built-in coordinate transform.
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const inv = ctm.inverse();
+    const clickX = inv.a * e.clientX + inv.c * e.clientY + inv.e;
+    const clickY = inv.b * e.clientX + inv.d * e.clientY + inv.f;
 
     // Find nearest projected point.
     let best = projected[0];
@@ -290,6 +318,7 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
       {/* Map area */}
       <div className="flex-1 relative">
         <svg
+          ref={svgRef}
           viewBox={vb}
           className="w-full h-full cursor-pointer"
           preserveAspectRatio="xMidYMid meet"
@@ -337,6 +366,51 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
             strokeLinejoin="round"
           />
 
+          {/* City labels — outside clipPath so text isn't cut off at borders */}
+          {(() => {
+            const r = Math.max(0.6, Math.min(detail.svgWidth, detail.svgHeight) * 0.003);
+            const fontSize = Math.max(2.5, Math.min(detail.svgWidth, detail.svgHeight) * 0.012);
+            const charW = fontSize * 0.55;
+            // Simple collision detection: track placed label bounding boxes.
+            const placed: { x: number; y: number; w: number; h: number }[] = [];
+            return cities.map(city => {
+              const lx = city.svgX + r + 1;
+              const ly = city.svgY;
+              const lw = city.name.length * charW;
+              const lh = fontSize * 1.2;
+              // Check overlap with already-placed labels.
+              const overlaps = placed.some(p =>
+                lx < p.x + p.w && lx + lw > p.x &&
+                ly - lh / 2 < p.y + p.h / 2 && ly + lh / 2 > p.y - p.h / 2
+              );
+              if (overlaps) return null;
+              placed.push({ x: lx, y: ly, w: lw, h: lh });
+              return (
+                <g key={`${city.name}-${city.state}`} style={{ pointerEvents: 'none' }}>
+                  <circle
+                    cx={city.svgX}
+                    cy={city.svgY}
+                    r={r}
+                    fill="#4a4539"
+                    fillOpacity={0.5}
+                  />
+                  <text
+                    x={lx}
+                    y={ly}
+                    dominantBaseline="central"
+                    fontSize={fontSize}
+                    fontWeight={600}
+                    fill="#4a4539"
+                    fillOpacity={0.55}
+                    style={{ userSelect: 'none' }}
+                  >
+                    {city.name}
+                  </text>
+                </g>
+              );
+            });
+          })()}
+
           {/* Selected point marker */}
           {selected && (
             <>
@@ -357,7 +431,7 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
                 fill="#f76707"
                 style={{ pointerEvents: 'none', userSelect: 'none' }}
               >
-                {selected.snowIn.toFixed(1)}″
+                {(selected.bloopTotal ?? selected.snowIn).toFixed(1)}″
               </text>
             </>
           )}

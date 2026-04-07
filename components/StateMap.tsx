@@ -7,6 +7,7 @@ import statePaths from '@/lib/state-paths.json';
 interface StateSummary {
   maxSnowIn: number;
   pointCount: number;
+  snowPct?: number;
 }
 
 interface StateData {
@@ -72,10 +73,22 @@ export function StateMap() {
             />
           </symbol>
 
-          {/* Tiled snowflake pattern */}
+          {/* Tiled snowflake pattern — solid snow states */}
           <pattern id="snowflakes" width="60" height="60" patternUnits="userSpaceOnUse" patternTransform="rotate(8)">
             <use href="#flake" x="5" y="5" width="26" height="26" />
             <use href="#flake" x="38" y="36" width="18" height="18" />
+          </pattern>
+
+          {/* Trace snowflake — same icon but light blue on white background */}
+          <symbol id="flake-trace" viewBox="0 -960 960 960">
+            <path
+              fill="rgba(58,134,255,0.18)"
+              d="M450-80v-95l-73 62-39-46 112-94v-175l-151 87-26 145-59-11 17-94-82 47-30-52 82-47-90-33 20-56 138 49 150-87-150-86-138 49-20-56 90-33-82-48 30-52 82 48-17-94 59-11 26 145 151 87v-175l-112-94 39-46 73 62v-96h60v96l72-62 39 46-111 94v175l150-87 26-145 59 11-17 94 82-47 30 53-82 46 90 33-20 56-138-49-150 86 150 87 138-49 20 56-90 33 83 47-30 52-83-47 17 94-59 11-26-145-150-87v175l111 94-39 46-72-62v95h-60Z"
+            />
+          </symbol>
+          <pattern id="snowflakes-trace" width="60" height="60" patternUnits="userSpaceOnUse" patternTransform="rotate(8)">
+            <use href="#flake-trace" x="5" y="5" width="26" height="26" />
+            <use href="#flake-trace" x="38" y="36" width="18" height="18" />
           </pattern>
         </defs>
 
@@ -97,9 +110,12 @@ export function StateMap() {
 
           {/* States */}
           {states.map(state => {
-            // Use real data if available, fall back to mock for preview.
             const summary = data?.states[state.abbr.toLowerCase()] ?? data?.states[state.abbr];
-            const hasSnow = summary && summary.maxSnowIn > 0;
+            const maxSnow = summary?.maxSnowIn ?? 0;
+            const snowPct = summary?.snowPct ?? 0;
+            const hasSnow = snowPct >= 5;          // ≥10% of points have ≥1″ → solid blue
+            const traceSnow = maxSnow > 0 && !hasSnow; // some snow but sparse → flakes only
+            const anySnow = hasSnow || traceSnow;
             const isHovered = hovered === state.abbr;
             const fill = hasSnow ? SNOW_COLOR : '#ffffff';
             const cx = state.anchorX ?? state.labelX;
@@ -122,17 +138,25 @@ export function StateMap() {
                 {/* Base fill */}
                 <path
                   d={state.path}
-                  fill={isHovered && !hasSnow ? '#f0f7ff' : fill}
+                  fill={isHovered && !anySnow ? '#f0f7ff' : fill}
                   stroke={hasSnow ? 'rgba(255,255,255,0.5)' : '#d0dcea'}
                   strokeWidth={0.75}
                   strokeLinejoin="round"
                   style={{ transition: 'fill 0.15s ease' }}
                 />
-                {/* Snowflake pattern overlay — clipped to state shape */}
+                {/* Snowflake pattern overlay */}
                 {hasSnow && (
                   <path
                     d={state.path}
                     fill="url(#snowflakes)"
+                    stroke="none"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                )}
+                {traceSnow && (
+                  <path
+                    d={state.path}
+                    fill="url(#snowflakes-trace)"
                     stroke="none"
                     style={{ pointerEvents: 'none' }}
                   />
@@ -148,6 +172,7 @@ export function StateMap() {
                     fill={
                       isHovered ? '#4a4539'
                         : hasSnow ? '#ffffff'
+                        : traceSnow ? '#7eaed4'
                         : '#b0bcc8'
                     }
                     style={{
@@ -169,9 +194,13 @@ export function StateMap() {
         {/* External labels */}
         {states.filter(s => s.external).map(state => {
           const summary = data?.states[state.abbr.toLowerCase()] ?? data?.states[state.abbr];
-          const hasSnow = summary && summary.maxSnowIn > 0;
+          const maxSnow = summary?.maxSnowIn ?? 0;
+          const snowPct = summary?.snowPct ?? 0;
+          const hasSnow = snowPct >= 5;
+          const traceSnow = maxSnow > 0 && !hasSnow;
+          const anySnow = hasSnow || traceSnow;
           const isHovered = hovered === state.abbr;
-          const color = isHovered ? '#4a4539' : hasSnow ? SNOW_COLOR : '#7eaed4';
+          const color = isHovered ? '#4a4539' : hasSnow ? SNOW_COLOR : traceSnow ? '#a5c8e8' : '#7eaed4';
 
           return (
             <g
@@ -181,15 +210,15 @@ export function StateMap() {
               onMouseEnter={() => setHovered(state.abbr)}
               onMouseLeave={() => setHovered(null)}
             >
-              {hasSnow && (
-                <g transform={`translate(${state.labelX - 10}, ${state.labelY - 4.5})`}>
+              {anySnow && (
+                <g transform={`translate(${state.labelX - 10}, ${state.labelY - 4.5})`} opacity={traceSnow ? 0.5 : 1}>
                   <line x1="4.5" y1="0.5" x2="4.5" y2="8.5" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
                   <line x1="1" y1="2.2" x2="8" y2="6.8" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
                   <line x1="1" y1="6.8" x2="8" y2="2.2" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
                 </g>
               )}
               <text
-                x={state.labelX + (hasSnow ? 2 : 0)}
+                x={state.labelX + (anySnow ? 2 : 0)}
                 y={state.labelY}
                 textAnchor="start"
                 dominantBaseline="central"
