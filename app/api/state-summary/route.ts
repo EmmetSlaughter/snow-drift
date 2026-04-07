@@ -13,14 +13,19 @@ import { STATE_BOUNDS } from '@/lib/state-bounds';
 
 export const dynamic = 'force-dynamic';
 
-function assignStates(lat: number, lon: number): string[] {
-  const matches: string[] = [];
+// Assign a point to the single best-matching state (closest center).
+// Avoids double-counting points in overlapping bounding boxes.
+function assignState(lat: number, lon: number): string | null {
+  let bestAbbr: string | null = null;
+  let bestDist = Infinity;
   for (const [abbr, b] of Object.entries(STATE_BOUNDS)) {
-    if (lat >= b.minLat && lat <= b.maxLat && lon >= b.minLon && lon <= b.maxLon) {
-      matches.push(abbr);
-    }
+    if (lat < b.minLat || lat > b.maxLat || lon < b.minLon || lon > b.maxLon) continue;
+    const cLat = (b.minLat + b.maxLat) / 2;
+    const cLon = (b.minLon + b.maxLon) / 2;
+    const d = (lat - cLat) ** 2 + (lon - cLon) ** 2;
+    if (d < bestDist) { bestDist = d; bestAbbr = abbr; }
   }
-  return matches;
+  return bestAbbr;
 }
 
 export async function GET() {
@@ -35,39 +40,37 @@ export async function GET() {
     data: { locationId: number; lat: number; lon: number; snowIn: number }[];
   };
 
-  // Count total grid points per state (from the locations table).
+  // Count total grid points per state (single assignment per point).
   const allLocs = await sql`SELECT lat, lon FROM locations` as { lat: number; lon: number }[];
 
   const totalByState: Record<string, number> = {};
   for (const loc of allLocs) {
-    for (const abbr of assignStates(loc.lat, loc.lon)) {
-      totalByState[abbr] = (totalByState[abbr] ?? 0) + 1;
-    }
+    const abbr = assignState(loc.lat, loc.lon);
+    if (abbr) totalByState[abbr] = (totalByState[abbr] ?? 0) + 1;
   }
 
-  // Summarize snowy points per state.
+  // Summarize snowy points per state (single assignment per point).
   const stateSummary: Record<string, {
     maxSnowIn: number;
-    pointCount: number;   // points with any snow
-    points1in: number;    // points with ≥1″
-    totalPoints: number;  // total grid points in state
-    snowPct: number;      // % of points with ≥1″
+    pointCount: number;
+    points1in: number;
+    totalPoints: number;
+    snowPct: number;
   }> = {};
 
   for (const pt of data) {
-    const states = assignStates(pt.lat, pt.lon);
-    for (const abbr of states) {
-      if (!stateSummary[abbr]) {
-        stateSummary[abbr] = {
-          maxSnowIn: 0, pointCount: 0, points1in: 0,
-          totalPoints: totalByState[abbr] ?? 1, snowPct: 0,
-        };
-      }
-      const s = stateSummary[abbr];
-      if (pt.snowIn > s.maxSnowIn) s.maxSnowIn = pt.snowIn;
-      s.pointCount++;
-      if (pt.snowIn >= 1) s.points1in++;
+    const abbr = assignState(pt.lat, pt.lon);
+    if (!abbr) continue;
+    if (!stateSummary[abbr]) {
+      stateSummary[abbr] = {
+        maxSnowIn: 0, pointCount: 0, points1in: 0,
+        totalPoints: totalByState[abbr] ?? 1, snowPct: 0,
+      };
     }
+    const s = stateSummary[abbr];
+    if (pt.snowIn > s.maxSnowIn) s.maxSnowIn = pt.snowIn;
+    s.pointCount++;
+    if (pt.snowIn >= 1) s.points1in++;
   }
 
   // Compute snowPct.

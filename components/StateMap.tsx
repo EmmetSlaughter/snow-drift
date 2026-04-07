@@ -217,7 +217,7 @@ export function StateMap() {
             const maxSnow = summary?.maxSnowIn ?? 0;
             const snowPct = summary?.snowPct ?? 0;
             const hasSnow = snowPct >= 5;          // ≥10% of points have ≥1″ → solid blue
-            const traceSnow = maxSnow > 0 && !hasSnow; // some snow but sparse → flakes only
+            const traceSnow = maxSnow >= 0.1 && !hasSnow; // some snow but sparse → flakes only
             const anySnow = hasSnow || traceSnow;
             const isHovered = hovered === state.abbr;
             const fill = hasSnow ? SNOW_COLOR : '#ffffff';
@@ -300,7 +300,7 @@ export function StateMap() {
           const maxSnow = summary?.maxSnowIn ?? 0;
           const snowPct = summary?.snowPct ?? 0;
           const hasSnow = snowPct >= 5;
-          const traceSnow = maxSnow > 0 && !hasSnow;
+          const traceSnow = maxSnow >= 0.1 && !hasSnow;
           const anySnow = hasSnow || traceSnow;
           const isHovered = hovered === state.abbr;
           const color = isHovered ? '#4a4539' : hasSnow ? SNOW_COLOR : traceSnow ? '#a5c8e8' : '#7eaed4';

@@ -173,7 +173,6 @@ export async function GET(req: NextRequest) {
 
   // Compute BloopCast per hour.
   const bloopcast: { t: string; snowIn: number; kind: string }[] = [];
-  let totalBloop = 0;
   const allDeviations: number[] = [];
 
   for (const [t, sources] of byTime) {
@@ -192,8 +191,6 @@ export async function GET(req: NextRequest) {
     }
 
     const avg = weightTotal > 0 ? weightedSum / weightTotal : 0;
-    totalBloop += avg;
-
     // Track deviation for confidence calculation.
     if (values.length > 1) {
       const mean = values.reduce((a, b) => a + b, 0) / values.length;
@@ -228,12 +225,26 @@ export async function GET(req: NextRequest) {
   const sourceBonus = Math.min(5, (avgSourceCount - 1) * 2.5);
   const confidence = Math.round(Math.min(99, deviationScore + sourceBonus));
 
-  totalBloop = Math.round(totalBloop * 100) / 100;
+  // bloopTotal = weighted average of latest drift totals per source.
+  // This matches the drift chart endpoint — what models currently predict
+  // for the full storm window. Excludes "estimated fallen" inflation.
+  const SOURCE_W_DRIFT: Record<string, number> = { 'open-meteo': 1.0, 'ecmwf': 0.9, 'nws': 0.8 };
+  let driftWSum = 0, driftWTotal = 0;
+  for (const s of series) {
+    if (s.points.length > 0) {
+      const w = SOURCE_W_DRIFT[s.source] ?? 0.5;
+      driftWSum += s.points[s.points.length - 1].snowIn * w;
+      driftWTotal += w;
+    }
+  }
+  const bloopBarTotal = driftWTotal > 0
+    ? Math.round((driftWSum / driftWTotal) * 100) / 100
+    : Math.round(bloopcast.reduce((sum, h) => sum + h.snowIn, 0) * 100) / 100;
 
   return NextResponse.json({
     series, hourly, windowStart, windowEnd, estimatedIn, predictedIn,
     bloopcast,
-    bloopTotal: totalBloop,
+    bloopTotal: bloopBarTotal,
     confidence,
   });
 }

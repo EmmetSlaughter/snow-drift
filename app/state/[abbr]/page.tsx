@@ -46,18 +46,20 @@ export default function StatePage() {
         fetch('/api/map-data'),
         fetch(`/api/grid-points?state=${abbr}`),
       ]);
+      // Load grid points first so we can filter snow points to only those
+      // whose locationId is in this state's grid (avoids bounding box overlap).
+      let stateGridIds = new Set<number>();
+      if (gridRes.ok) {
+        const gridJson = await gridRes.json();
+        const gp = gridJson.points ?? [];
+        setGridPoints(gp);
+        stateGridIds = new Set(gp.map((g: { id: number }) => g.id));
+      }
       if (mapRes.ok) {
         const mapJson = await mapRes.json();
         const all: SnowPoint[] = mapJson.points ?? [];
-        setPoints(all.filter(p =>
-          p.lat >= bounds.minLat && p.lat <= bounds.maxLat &&
-          p.lon >= bounds.minLon && p.lon <= bounds.maxLon,
-        ));
+        setPoints(all.filter(p => stateGridIds.has(p.locationId)));
         setFetchedAt(mapJson.fetchedAt ?? null);
-      }
-      if (gridRes.ok) {
-        const gridJson = await gridRes.json();
-        setGridPoints(gridJson.points ?? []);
       }
     } catch {
       // silently fail
@@ -77,7 +79,9 @@ export default function StatePage() {
     );
   }
 
-  const snowCount = points.filter(p => p.snowIn > 0).length;
+  // Only count points at or above the lowest contour threshold (0.1″).
+  // Trace amounts below that don't render visually.
+  const snowCount = points.filter(p => p.snowIn >= 0.1).length;
 
   return (
     <div className="flex flex-col h-screen bg-white">

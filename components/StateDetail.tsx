@@ -140,13 +140,14 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
   // ── Cities for this state ─────────────────────────────────────────────────
   const cities = useMemo(() => {
     if (!detail) return [];
-    const stateCities = (citiesData as { name: string; state: string; pop: number; lat: number; lon: number }[])
-      .filter(c => c.state.toLowerCase() === abbr.toLowerCase());
+    const stateCities = (citiesData as { name: string; state: string; pop?: number; lat: number; lon: number }[])
+      .filter(c => c.state.toLowerCase() === abbr.toLowerCase())
+      .sort((a, b) => (b.pop ?? 0) - (a.pop ?? 0));
 
     // Show top cities by population, scaled to state size.
     // Larger states get more cities, smaller states get fewer.
     const area = detail.svgWidth * detail.svgHeight;
-    const maxCities = Math.min(25, Math.max(5, Math.round(area / 2000)));
+    const maxCities = Math.min(40, Math.max(8, Math.round(area / 1000)));
 
     return stateCities.slice(0, maxCities).map(c => {
       const [x, y] = albersProject(c.lon, c.lat);
@@ -175,18 +176,24 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
       hourlyView: 'bloop', loading: pt.hasSnow !== false,
     });
 
-    // Reverse geocode at the actual click/search location, not the grid point.
+    // Reverse geocode at the actual click/search location.
+    // Try municipality first; if nothing found, widen to county.
     if (mapTilerKey) {
-      fetch(`https://api.maptiler.com/geocoding/${geoLon},${geoLat}.json?key=${mapTilerKey}&limit=1&types=municipality`)
+      fetch(`https://api.maptiler.com/geocoding/${geoLon},${geoLat}.json?key=${mapTilerKey}&limit=1&types=municipality,county`)
         .then(r => r.json())
         .then(json => {
-          let name: string | null = json.features?.[0]?.text ?? null;
-          // Maine has unorganized townships like "T10 R6 WELS" — not useful.
-          // Fall back to county from context if the name looks like a township code.
+          const feat = json.features?.[0];
+          let name: string | null = feat?.text ?? null;
+          const type: string = feat?.place_type?.[0] ?? '';
+          // Maine unorganized townships — fall back to county.
           if (name && /^T\d|^TA? ?R\d|WELS|TWP/i.test(name)) {
-            const ctx = json.features?.[0]?.context as { id: string; text: string }[] | undefined;
-            const county = ctx?.find(c => c.id?.startsWith('county'))?.text;
+            const ctx = feat?.context as { id: string; text: string }[] | undefined;
+            const county = ctx?.find((c: { id: string }) => c.id?.startsWith('county'))?.text;
             name = county ? `${county} County` : null;
+          }
+          // If result is a county, label it as such.
+          if (type === 'county' && name && !name.includes('County')) {
+            name = `${name} County`;
           }
           setSelected(prev =>
             prev?.locationId === pt.locationId ? { ...prev, placeName: name } : prev,
@@ -219,14 +226,38 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
     try {
       const res = await fetch(`/api/forecasts?locationId=${locationId}&stormId=${stormId}`);
       const json = await res.json();
+      const driftSeries: DriftSeries[] = json.series ?? [];
+
+      // Compute bloopTotal using the same logic as the drift chart's BloopCast line.
+      // Build the exact same time-merged dataset, take the last point's value.
+      const SW: Record<string, number> = { 'open-meteo': 1.0, 'ecmwf': 0.9, 'nws': 0.8 };
+      const timeSet = new Set<string>();
+      for (const s of driftSeries) for (const p of s.points) timeSet.add(p.fetchedAt);
+      const allTimes = Array.from(timeSet).sort();
+      let computedBloopTotal: number | null = null;
+      if (allTimes.length > 0) {
+        // Compute weighted average at the latest time point.
+        const lastT = allTimes[allTimes.length - 1];
+        let wSum = 0, wTot = 0;
+        for (const s of driftSeries) {
+          const pt = s.points.find(p => p.fetchedAt === lastT);
+          if (pt) {
+            const w = SW[s.source] ?? 0.5;
+            wSum += pt.snowIn * w;
+            wTot += w;
+          }
+        }
+        computedBloopTotal = wTot > 0 ? Math.round((wSum / wTot) * 100) / 100 : null;
+      }
+
       setSelected(prev => {
         if (prev?.locationId !== locationId) return prev;
         return {
           ...prev,
-          drift: json.series ?? [],
+          drift: driftSeries,
           hourly: json.hourly ?? [],
           bloopcast: json.bloopcast ?? [],
-          bloopTotal: json.bloopTotal ?? null,
+          bloopTotal: computedBloopTotal,
           confidence: json.confidence ?? null,
           loading: false,
         };
@@ -306,6 +337,30 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
     );
   }, [selectByLatLon]);
 
+  // ── Grid points for click targets + contour anchoring ──────────────────────
+  const projectedGrid = useMemo(() => {
+    const snowMap = new Map(points.map(p => [`${p.lat},${p.lon}`, p]));
+    return gridPoints.map(g => {
+      const [x, y] = albersProject(g.lon, g.lat);
+      const snowPt = snowMap.get(`${g.lat},${g.lon}`);
+      return {
+        id: g.id, lat: g.lat, lon: g.lon, svgX: x, svgY: y,
+        snowIn: snowPt?.snowIn ?? 0,
+        locationId: snowPt?.locationId ?? g.id,
+        hasSnow: !!snowPt,
+      };
+    });
+  }, [gridPoints, points]);
+
+  projectedGridRef.current = projectedGrid;
+
+  const hitRadius = useMemo(() => {
+    if (gridPoints.length < 2) return 5;
+    const [x1] = albersProject(gridPoints[0].lon, gridPoints[0].lat);
+    const [x2] = albersProject(gridPoints[0].lon + 0.25, gridPoints[0].lat);
+    return Math.max(3, Math.abs(x2 - x1) * 0.75);
+  }, [gridPoints]);
+
   // ── Contour generation ────────────────────────────────────────────────────
 
   const THRESHOLDS = [0.1, 1, 3, 6, 12, 24];
@@ -321,31 +376,28 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
   const contourPaths = useMemo(() => {
     if (!detail || projected.length === 0) return [];
 
-    // Build a rasterized grid in SVG coordinate space.
-    // We need to cover the state's bounding box with a pixel grid,
-    // interpolate snow values, then run d3-contour on it.
-
     const pad = 5;
     const x0 = detail.svgMinX - pad;
     const y0 = detail.svgMinY - pad;
     const w = detail.svgWidth + pad * 2;
     const h = detail.svgHeight + pad * 2;
 
-    // Grid resolution — keep low for performance. 60×60 = 3,600 cells.
     const cols = Math.min(60, Math.round(w / 3));
     const rows = Math.min(60, Math.round(h / 3));
     const cellW = w / cols;
     const cellH = h / rows;
 
-    // Pre-compute point positions for fast lookup.
+    // Only use snowy points for IDW. Cells far from any snowy point
+    // get zeroed out after interpolation to prevent global bleed.
     const ptX = projected.map(p => p.svgX);
     const ptY = projected.map(p => p.svgY);
     const ptV = projected.map(p => p.snowIn);
-    const n = projected.length;
+    const n = ptX.length;
 
-    // IDW power=2 (simple, fast — no sorting needed).
-    // Use a distance cutoff so far-away points don't dilute.
-    const cutoff2 = (Math.max(w, h) * 0.4) ** 2;
+    // Max distance from nearest snowy point before forcing to zero.
+    // ~1.5 grid steps — tight enough to prevent bleed into non-snowy areas.
+    const fadeDist2 = (hitRadius * 2.5) ** 2;
+    const cutoff2 = (Math.max(w, h) * 0.3) ** 2;
     const values = new Float64Array(cols * rows);
 
     for (let j = 0; j < rows; j++) {
@@ -361,19 +413,32 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
           weightSum += weight;
           valSum += weight * ptV[k];
         }
-        values[j * cols + i] = weightSum > 0 ? valSum / weightSum : 0;
+        if (weightSum > 0) {
+          let val = valSum / weightSum;
+          // Find distance to nearest snowy point — fade to zero beyond fadeDist.
+          let nearestD2 = Infinity;
+          for (let k = 0; k < n; k++) {
+            const d2 = (gx - ptX[k]) ** 2 + (gy - ptY[k]) ** 2;
+            if (d2 < nearestD2) nearestD2 = d2;
+          }
+          if (nearestD2 > fadeDist2) {
+            val = 0;
+          } else if (nearestD2 > fadeDist2 * 0.25) {
+            // Smooth fade starting at 25% of fade distance.
+            const t = (nearestD2 - fadeDist2 * 0.25) / (fadeDist2 * 0.75);
+            val *= (1 - t);
+          }
+          values[j * cols + i] = val;
+        }
       }
     }
 
-    // Generate contours.
     const contourGen = contours()
       .size([cols, rows])
       .thresholds(THRESHOLDS);
 
     const bands = contourGen(Array.from(values));
 
-    // Create a transform that maps grid coordinates [0..cols, 0..rows]
-    // back to SVG coordinates.
     const pathGen = geoPath().projection({
       stream: (output) => ({
         point(px: number, py: number) {
@@ -392,38 +457,11 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
       color: COLORS[idx] ?? COLORS[COLORS.length - 1],
       threshold: band.value,
     }));
-  }, [detail, projected]);
+  }, [detail, projected, projectedGrid]);
 
   if (!detail) return <div className="text-center py-10 text-[#7eaed4]">State not found</div>;
 
   const vb = `${detail.svgMinX} ${detail.svgMinY} ${detail.svgWidth} ${detail.svgHeight}`;
-
-  // Find nearest grid point to a click for loading storm data.
-  // Project all grid points (for click targets). Build a snow lookup for quick matching.
-  const projectedGrid = useMemo(() => {
-    const snowMap = new Map(points.map(p => [`${p.lat},${p.lon}`, p]));
-    return gridPoints.map(g => {
-      const [x, y] = albersProject(g.lon, g.lat);
-      const snowPt = snowMap.get(`${g.lat},${g.lon}`);
-      return {
-        id: g.id, lat: g.lat, lon: g.lon, svgX: x, svgY: y,
-        snowIn: snowPt?.snowIn ?? 0,
-        locationId: snowPt?.locationId ?? g.id,
-        hasSnow: !!snowPt,
-      };
-    });
-  }, [gridPoints, points]);
-
-  // Keep the ref in sync.
-  projectedGridRef.current = projectedGrid;
-
-  // Hit radius — cover the full grid cell so there are no gaps between clickable areas.
-  const hitRadius = useMemo(() => {
-    if (gridPoints.length < 2) return 5;
-    const [x1] = albersProject(gridPoints[0].lon, gridPoints[0].lat);
-    const [x2] = albersProject(gridPoints[0].lon + 0.25, gridPoints[0].lat);
-    return Math.max(3, Math.abs(x2 - x1) * 0.75);
-  }, [gridPoints]);
 
   return (
     <div className="flex h-full bg-white">
@@ -530,55 +568,51 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
 
           {/* Selected point marker */}
           {selected && (() => {
-            const s = Math.min(detail.svgWidth, detail.svgHeight);
-            const hasSnow = selected.snowIn > 0;
-            const markerR = s * 0.015;
+            // Fixed marker size based on hitRadius (tied to grid spacing) —
+            // consistent across states.
+            const markerR = hitRadius * 0.7;
+            const fontSize = hitRadius * 1.2;
+            const snowAmt = selected.bloopTotal ?? selected.snowIn;
+            const hasSnow = snowAmt > 0;
+            const isTrace = hasSnow && snowAmt < 0.1;
+
+            // Label text
+            const label = !hasSnow
+              ? 'No snow'
+              : isTrace
+                ? 'Trace'
+                : `${snowAmt.toFixed(1)}″`;
+
             return (
               <g style={{ pointerEvents: 'none' }}>
                 {hasSnow ? (
-                  <>
-                    {/* Snowflake marker for snowy points */}
-                    <use
-                      href="#flake-marker"
-                      x={selected.svgX - markerR}
-                      y={selected.svgY - markerR}
-                      width={markerR * 2}
-                      height={markerR * 2}
-                    />
-                    <text
-                      x={selected.svgX}
-                      y={selected.svgY - markerR - s * 0.005}
-                      textAnchor="middle"
-                      fontSize={s * 0.025}
-                      fontWeight={800}
-                      fill="#3a86ff"
-                    >
-                      {(selected.bloopTotal ?? selected.snowIn).toFixed(1)}″
-                    </text>
-                  </>
+                  <use
+                    href="#flake-marker"
+                    x={selected.svgX - markerR}
+                    y={selected.svgY - markerR}
+                    width={markerR * 2}
+                    height={markerR * 2}
+                  />
                 ) : (
-                  <>
-                    {/* Sun marker for no-snow points */}
-                    <circle
-                      cx={selected.svgX}
-                      cy={selected.svgY}
-                      r={markerR}
-                      fill="#f59f00"
-                      stroke="#ffffff"
-                      strokeWidth={0.8}
-                    />
-                    <text
-                      x={selected.svgX}
-                      y={selected.svgY - markerR - s * 0.005}
-                      textAnchor="middle"
-                      fontSize={s * 0.02}
-                      fontWeight={700}
-                      fill="#f59f00"
-                    >
-                      No snow
-                    </text>
-                  </>
+                  <circle
+                    cx={selected.svgX}
+                    cy={selected.svgY}
+                    r={markerR * 0.7}
+                    fill="#f59f00"
+                    stroke="#ffffff"
+                    strokeWidth={hitRadius * 0.2}
+                  />
                 )}
+                <text
+                  x={selected.svgX}
+                  y={selected.svgY - markerR - hitRadius * 0.3}
+                  textAnchor="middle"
+                  fontSize={fontSize}
+                  fontWeight={800}
+                  fill={hasSnow ? '#3a86ff' : '#f59f00'}
+                >
+                  {label}
+                </text>
               </g>
             );
           })()}
@@ -697,13 +731,44 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
             ← close
           </button>
 
-          {/* Hero — BloopCast total + confidence */}
-          <div className="flex items-baseline gap-1.5 mb-1">
-            <span className="text-4xl font-black text-[#3a86ff] leading-none tabular-nums">
-              {(selected.bloopTotal ?? selected.snowIn).toFixed(1)}
-            </span>
-            <span className="text-xl font-bold text-[#a5d8ff] leading-none">″</span>
-          </div>
+          {/* Hero — BloopCast total, computed from drift data to match the chart */}
+          {(() => {
+            // Compute from drift series — same logic as the BloopCast drift line.
+            let amt = selected.snowIn;
+            if (selected.drift && selected.drift.length > 0) {
+              const SW: Record<string, number> = { 'open-meteo': 1.0, 'ecmwf': 0.9, 'nws': 0.8 };
+              const timeSet = new Set<string>();
+              for (const s of selected.drift) for (const p of s.points) timeSet.add(p.fetchedAt);
+              const sorted = Array.from(timeSet).sort();
+              if (sorted.length > 0) {
+                const lastT = sorted[sorted.length - 1];
+                let wS = 0, wT = 0;
+                for (const s of selected.drift) {
+                  const pt = s.points.find(p => p.fetchedAt === lastT);
+                  if (pt) { const w = SW[s.source] ?? 0.5; wS += pt.snowIn * w; wT += w; }
+                }
+                if (wT > 0) amt = Math.round((wS / wT) * 100) / 100;
+              }
+            }
+            const noSnow = amt === 0 || amt === null;
+            const trace = !noSnow && amt < 0.1;
+            return (
+              <div className="flex items-baseline gap-1.5 mb-1">
+                {noSnow ? (
+                  <span className="text-2xl font-black text-[#f59f00] leading-none">No snow</span>
+                ) : trace ? (
+                  <span className="text-2xl font-black text-[#3a86ff] leading-none">Trace</span>
+                ) : (
+                  <>
+                    <span className="text-4xl font-black text-[#3a86ff] leading-none tabular-nums">
+                      {amt.toFixed(1)}
+                    </span>
+                    <span className="text-xl font-bold text-[#a5d8ff] leading-none">″</span>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           {selected.confidence !== null && (
             <div className="flex items-center gap-2 mb-1">
               <div className="flex-1 h-1.5 bg-[#e8f4ff] rounded-full overflow-hidden">
