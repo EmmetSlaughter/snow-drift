@@ -480,10 +480,14 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
             <clipPath id="state-clip">
               <path d={detail.path} />
             </clipPath>
-            {/* Snowflake marker for selected snowy points */}
+            {/* Snowflake marker for selected snowy points — white with dark outline for contrast */}
             <symbol id="flake-marker" viewBox="0 -960 960 960">
               <path
-                fill="#3a86ff"
+                fill="white"
+                stroke="#1e3a8a"
+                strokeWidth="40"
+                strokeLinejoin="round"
+                paintOrder="stroke fill"
                 d="M450-80v-95l-73 62-39-46 112-94v-175l-151 87-26 145-59-11 17-94-82 47-30-52 82-47-90-33 20-56 138 49 150-87-150-86-138 49-20-56 90-33-82-48 30-52 82 48-17-94 59-11 26 145 151 87v-175l-112-94 39-46 73 62v-96h60v96l72-62 39 46-111 94v175l150-87 26-145 59 11-17 94 82-47 30 53-82 46 90 33-20 56-138-49-150 86 150 87 138-49 20 56-90 33 83 47-30 52-83-47 17 94-59 11-26-145-150-87v175l111 94-39 46-72-62v95h-60Z"
               />
             </symbol>
@@ -523,40 +527,67 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
 
           {/* City labels — outside clipPath so text isn't cut off at borders */}
           {(() => {
-            const r = Math.max(0.6, Math.min(detail.svgWidth, detail.svgHeight) * 0.003);
-            const fontSize = Math.max(2.5, Math.min(detail.svgWidth, detail.svgHeight) * 0.012);
-            const charW = fontSize * 0.55;
-            // Simple collision detection: track placed label bounding boxes.
+            // Target fixed screen-pixel sizes by estimating the SVG→screen scale.
+            // The SVG uses preserveAspectRatio=meet, so the limiting dimension
+            // determines how many screen pixels each SVG unit gets.
+            // We target ~11px screen font and ~4px screen dot radius.
+            const pxPerUnit = Math.min(900 / detail.svgWidth, 700 / detail.svgHeight);
+            const baseR = 4 / pxPerUnit;
+            const baseFontSize = 11 / pxPerUnit;
+            const charW = baseFontSize * 0.55;
             const placed: { x: number; y: number; w: number; h: number }[] = [];
+
             return cities.map(city => {
-              const lx = city.svgX + r + 1;
+              const isCap = (city as { capital?: boolean }).capital;
+              const pop = (city as { pop?: number }).pop ?? 0;
+              // Scale: capitals and big cities get bigger markers/text.
+              const sizeScale = isCap ? 1.3 : pop > 500000 ? 1.2 : pop > 100000 ? 1.1 : 1;
+              const r = baseR * sizeScale;
+              const fontSize = baseFontSize * sizeScale;
+              const markerW = isCap ? r * 3 : r * 2;
+
+              const lx = city.svgX + markerW / 2 + 1;
               const ly = city.svgY;
-              const lw = city.name.length * charW;
-              const lh = fontSize * 1.2;
-              // Check overlap with already-placed labels.
+              const lw = city.name.length * charW * sizeScale;
+              const lh = fontSize * 1.3;
+
               const overlaps = placed.some(p =>
                 lx < p.x + p.w && lx + lw > p.x &&
                 ly - lh / 2 < p.y + p.h / 2 && ly + lh / 2 > p.y - p.h / 2
               );
               if (overlaps) return null;
               placed.push({ x: lx, y: ly, w: lw, h: lh });
+
               return (
                 <g key={`${city.name}-${city.state}`} style={{ pointerEvents: 'none' }}>
-                  <circle
-                    cx={city.svgX}
-                    cy={city.svgY}
-                    r={r}
-                    fill="#4a4539"
-                    fillOpacity={0.5}
-                  />
+                  {isCap ? (
+                    // Star marker for capitals
+                    <polygon
+                      points={Array.from({ length: 10 }, (_, i) => {
+                        const a = (i * 36 - 90) * Math.PI / 180;
+                        const ra = i % 2 === 0 ? r * 1.4 : r * 0.6;
+                        return `${city.svgX + Math.cos(a) * ra},${city.svgY + Math.sin(a) * ra}`;
+                      }).join(' ')}
+                      fill="#4a4539"
+                      fillOpacity={0.65}
+                    />
+                  ) : (
+                    <circle
+                      cx={city.svgX}
+                      cy={city.svgY}
+                      r={r}
+                      fill="#4a4539"
+                      fillOpacity={pop > 100000 ? 0.55 : 0.4}
+                    />
+                  )}
                   <text
                     x={lx}
                     y={ly}
                     dominantBaseline="central"
                     fontSize={fontSize}
-                    fontWeight={600}
+                    fontWeight={isCap ? 800 : pop > 100000 ? 700 : 600}
                     fill="#4a4539"
-                    fillOpacity={0.55}
+                    fillOpacity={isCap ? 0.7 : pop > 100000 ? 0.6 : 0.45}
                     style={{ userSelect: 'none' }}
                   >
                     {city.name}
@@ -568,10 +599,10 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
 
           {/* Selected point marker */}
           {selected && (() => {
-            // Fixed marker size based on hitRadius (tied to grid spacing) —
-            // consistent across states.
-            const markerR = hitRadius * 0.7;
-            const fontSize = hitRadius * 1.2;
+            // Same pixel-targeting as city labels.
+            const pxPerUnit = Math.min(900 / detail.svgWidth, 700 / detail.svgHeight);
+            const markerR = 14 / pxPerUnit;
+            const fontSize = 13 / pxPerUnit;
             const snowAmt = selected.bloopTotal ?? selected.snowIn;
             const hasSnow = snowAmt > 0;
             const isTrace = hasSnow && snowAmt < 0.1;
@@ -600,16 +631,16 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
                     r={markerR * 0.7}
                     fill="#f59f00"
                     stroke="#ffffff"
-                    strokeWidth={hitRadius * 0.2}
+                    strokeWidth={markerR * 0.2}
                   />
                 )}
                 <text
                   x={selected.svgX}
-                  y={selected.svgY - markerR - hitRadius * 0.3}
+                  y={selected.svgY - markerR - fontSize * 0.2}
                   textAnchor="middle"
                   fontSize={fontSize}
                   fontWeight={800}
-                  fill={hasSnow ? '#3a86ff' : '#f59f00'}
+                  fill={hasSnow ? '#1e3a8a' : '#f59f00'}
                 >
                   {label}
                 </text>
