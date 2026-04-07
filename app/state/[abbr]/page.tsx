@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { STATE_BOUNDS, VALID_STATES } from '@/lib/state-bounds';
 
 const StateDetail = dynamic(
@@ -22,36 +22,51 @@ interface SnowPoint { locationId: number; lat: number; lon: number; snowIn: numb
 
 export default function StatePage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const abbr = (params.abbr as string).toLowerCase();
   const bounds = STATE_BOUNDS[abbr];
   const valid = VALID_STATES.has(abbr);
 
-  const [points, setPoints]       = useState<SnowPoint[]>([]);
-  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
-  const [loading, setLoading]     = useState(true);
+  // Optional lat/lon from search — auto-select nearest point on load.
+  const focusLat = searchParams.get('lat') ? Number(searchParams.get('lat')) : undefined;
+  const focusLon = searchParams.get('lon') ? Number(searchParams.get('lon')) : undefined;
 
-  const loadMapData = useCallback(async () => {
+  interface GridPoint { id: number; lat: number; lon: number }
+
+  const [points, setPoints]         = useState<SnowPoint[]>([]);
+  const [gridPoints, setGridPoints] = useState<GridPoint[]>([]);
+  const [fetchedAt, setFetchedAt]   = useState<string | null>(null);
+  const [loading, setLoading]       = useState(true);
+
+  const loadData = useCallback(async () => {
     if (!valid) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/map-data');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      const all: SnowPoint[] = json.points ?? [];
-      const filtered = all.filter(p =>
-        p.lat >= bounds.minLat && p.lat <= bounds.maxLat &&
-        p.lon >= bounds.minLon && p.lon <= bounds.maxLon,
-      );
-      setPoints(filtered);
-      setFetchedAt(json.fetchedAt ?? null);
+      const [mapRes, gridRes] = await Promise.all([
+        fetch('/api/map-data'),
+        fetch(`/api/grid-points?state=${abbr}`),
+      ]);
+      if (mapRes.ok) {
+        const mapJson = await mapRes.json();
+        const all: SnowPoint[] = mapJson.points ?? [];
+        setPoints(all.filter(p =>
+          p.lat >= bounds.minLat && p.lat <= bounds.maxLat &&
+          p.lon >= bounds.minLon && p.lon <= bounds.maxLon,
+        ));
+        setFetchedAt(mapJson.fetchedAt ?? null);
+      }
+      if (gridRes.ok) {
+        const gridJson = await gridRes.json();
+        setGridPoints(gridJson.points ?? []);
+      }
     } catch {
       // silently fail
     } finally {
       setLoading(false);
     }
-  }, [valid, bounds]);
+  }, [valid, abbr, bounds]);
 
-  useEffect(() => { loadMapData(); }, [loadMapData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
   if (!valid) {
     return (
@@ -91,7 +106,7 @@ export default function StatePage() {
       </header>
 
       <main className="flex-1 relative overflow-hidden">
-        <StateDetail abbr={abbr} points={points} fetchedAt={fetchedAt} />
+        <StateDetail abbr={abbr} points={points} gridPoints={gridPoints} fetchedAt={fetchedAt} focusLat={focusLat} focusLon={focusLon} />
       </main>
     </div>
   );

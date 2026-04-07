@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import statePaths from '@/lib/state-paths.json';
+import { STATE_BOUNDS } from '@/lib/state-bounds';
 
 interface StateSummary {
   maxSnowIn: number;
@@ -31,10 +32,17 @@ interface StateEntry {
 const SNOW_COLOR = '#3a86ff';
 
 
+interface GeoResult { place_name: string; center: [number, number] }
+
 export function StateMap() {
   const router = useRouter();
+  const mapTilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '';
   const [data, setData] = useState<StateData | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<GeoResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const states = statePaths as StateEntry[];
 
   useEffect(() => {
@@ -43,6 +51,47 @@ export function StateMap() {
       .then(setData)
       .catch(() => {});
   }, []);
+
+  // Find which state a lat/lon falls in and navigate there, passing coords.
+  const navigateToLocation = useCallback((lat: number, lon: number) => {
+    for (const [abbr, b] of Object.entries(STATE_BOUNDS)) {
+      if (lat >= b.minLat && lat <= b.maxLat && lon >= b.minLon && lon <= b.maxLon) {
+        router.push(`/state/${abbr}?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`);
+        return;
+      }
+    }
+  }, [router]);
+
+  const handleSearch = useCallback((value: string) => {
+    setQuery(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (value.length < 3) { setSearchResults([]); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(
+          `https://api.maptiler.com/geocoding/${encodeURIComponent(value)}.json?key=${mapTilerKey}&country=us&limit=5`,
+        );
+        const json = await res.json();
+        setSearchResults(
+          (json.features ?? []).map((f: { place_name: string; center: [number, number] }) => ({
+            place_name: f.place_name,
+            center: f.center,
+          })),
+        );
+      } catch { setSearchResults([]); }
+      setSearching(false);
+    }, 300);
+  }, [mapTilerKey]);
+
+  const handleGeolocate = useCallback(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => navigateToLocation(pos.coords.latitude, pos.coords.longitude),
+      () => {},
+      { enableHighAccuracy: false, timeout: 8000 },
+    );
+  }, [navigateToLocation]);
 
   return (
     <div className="w-full h-full flex flex-col items-center justify-center bg-[#dbeefe]">
@@ -57,6 +106,60 @@ export function StateMap() {
             ? `Updated ${new Date(data.fetchedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
             : 'is it gonna snow?'}
         </p>
+      </div>
+
+      {/* Search bar */}
+      <div className="w-full max-w-sm mb-3 px-4 relative select-none">
+        <div className="relative flex gap-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={query}
+              onChange={e => handleSearch(e.target.value)}
+              placeholder="Search a city or zip…"
+              className="w-full bg-white/70 backdrop-blur-sm text-[#4a4539] placeholder-[#b0bcc8]
+                         rounded-full px-4 py-2 text-xs focus:outline-none focus:ring-2
+                         focus:ring-[#3a86ff]/30 border border-[#c0d8ee] shadow-sm"
+            />
+            {searching && (
+              <span className="absolute right-3 top-2.5 text-[#b0bcc8] text-[10px] animate-pulse">…</span>
+            )}
+          </div>
+          <button
+            onClick={handleGeolocate}
+            title="Use my location"
+            className="flex-none w-9 h-9 flex items-center justify-center bg-white/70
+                       backdrop-blur-sm rounded-full border border-[#c0d8ee] text-[#7eaed4]
+                       hover:bg-white hover:text-[#4a4539] transition-colors shadow-sm"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="4" />
+              <line x1="12" y1="2" x2="12" y2="6" />
+              <line x1="12" y1="18" x2="12" y2="22" />
+              <line x1="2" y1="12" x2="6" y2="12" />
+              <line x1="18" y1="12" x2="22" y2="12" />
+            </svg>
+          </button>
+        </div>
+
+        {searchResults.length > 0 && (
+          <div className="absolute left-4 right-4 mt-1 bg-white/95 backdrop-blur-md rounded-xl border border-[#c0d8ee] shadow-md overflow-hidden z-10">
+            {searchResults.map((r, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  navigateToLocation(r.center[1], r.center[0]);
+                  setQuery('');
+                  setSearchResults([]);
+                }}
+                className="w-full text-left px-3 py-2 text-xs text-[#4a4539] hover:bg-[#e8f4ff]
+                           border-b border-[#e8f4ff] last:border-0 transition-colors"
+              >
+                {r.place_name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <svg viewBox="0 0 960 620" className="w-full max-w-4xl">

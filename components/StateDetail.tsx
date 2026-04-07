@@ -1,15 +1,16 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer,
+  LineChart, Line, BarChart, Bar, Area, ComposedChart,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { contours } from 'd3-contour';
 import { geoPath } from 'd3-geo';
 import detailPaths from '@/lib/state-detail-paths.json';
 import citiesData from '@/lib/us-cities.json';
 import { albersProject } from '@/lib/albers';
+import { STATE_BOUNDS } from '@/lib/state-bounds';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,8 @@ interface SelectedPoint {
   snowIn: number;
   svgX: number;
   svgY: number;
+  showMarker: boolean;        // only show map marker for search/geolocate, not grid clicks
+  placeName: string | null;   // reverse geocoded town name
   storms: Storm[] | null;
   selectedStormId: number | null;
   drift: DriftSeries[] | null;
@@ -49,7 +52,7 @@ interface SelectedPoint {
   bloopcast: BloopHour[] | null;
   bloopTotal: number | null;
   confidence: number | null;
-  hourlyView: 'bloop' | string; // 'bloop' or a source name
+  hourlyView: 'bloop' | string;
   loading: boolean;
 }
 
@@ -96,18 +99,34 @@ function fmtTick(iso: string): string {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
+interface GridPoint {
+  id: number;
+  lat: number;
+  lon: number;
+}
+
 interface StateDetailProps {
   abbr: string;
   points: SnowPoint[];
+  gridPoints: GridPoint[];
   fetchedAt: string | null;
+  focusLat?: number;
+  focusLon?: number;
 }
 
-export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
+interface GeoResult { place_name: string; center: [number, number] }
+
+export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, focusLon }: StateDetailProps) {
+  const mapTilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '';
   const detail = (detailPaths as DetailEntry[]).find(
     s => s.abbr.toLowerCase() === abbr.toLowerCase(),
   );
 
   const [selected, setSelected] = useState<SelectedPoint | null>(null);
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<GeoResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(null);
 
   // Project all snow points to SVG coordinates (memoized to avoid recomputing contours).
   const projected = useMemo(() =>
@@ -137,14 +156,47 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
 
   // ── Data fetching ─────────────────────────────────────────────────────────
 
-  const fetchStorms = useCallback(async (pt: typeof projected[0]) => {
+  // Allow overriding the marker position (for clicks at a specific spot vs grid point).
+  const fetchStorms = useCallback(async (
+    pt: { locationId: number; lat: number; lon: number; snowIn: number; svgX: number; svgY: number; hasSnow?: boolean },
+    markerPos?: { svgX: number; svgY: number; lat: number; lon: number },
+  ) => {
+    const mx = markerPos?.svgX ?? pt.svgX;
+    const my = markerPos?.svgY ?? pt.svgY;
+    const geoLat = markerPos?.lat ?? pt.lat;
+    const geoLon = markerPos?.lon ?? pt.lon;
+
     setSelected({
       locationId: pt.locationId, lat: pt.lat, lon: pt.lon, snowIn: pt.snowIn,
-      svgX: pt.svgX, svgY: pt.svgY,
-      storms: null, selectedStormId: null, drift: null, hourly: null,
+      svgX: mx, svgY: my, showMarker: true, placeName: null,
+      storms: pt.hasSnow === false ? [] : null,
+      selectedStormId: null, drift: null, hourly: null,
       bloopcast: null, bloopTotal: null, confidence: null,
-      hourlyView: 'bloop', loading: true,
+      hourlyView: 'bloop', loading: pt.hasSnow !== false,
     });
+
+    // Reverse geocode at the actual click/search location, not the grid point.
+    if (mapTilerKey) {
+      fetch(`https://api.maptiler.com/geocoding/${geoLon},${geoLat}.json?key=${mapTilerKey}&limit=1&types=municipality`)
+        .then(r => r.json())
+        .then(json => {
+          let name: string | null = json.features?.[0]?.text ?? null;
+          // Maine has unorganized townships like "T10 R6 WELS" — not useful.
+          // Fall back to county from context if the name looks like a township code.
+          if (name && /^T\d|^TA? ?R\d|WELS|TWP/i.test(name)) {
+            const ctx = json.features?.[0]?.context as { id: string; text: string }[] | undefined;
+            const county = ctx?.find(c => c.id?.startsWith('county'))?.text;
+            name = county ? `${county} County` : null;
+          }
+          setSelected(prev =>
+            prev?.locationId === pt.locationId ? { ...prev, placeName: name } : prev,
+          );
+        })
+        .catch(() => {});
+    }
+
+    // Skip API calls for points with no snow data.
+    if (pt.hasSnow === false) return;
     try {
       const res = await fetch(`/api/storms?locationId=${pt.locationId}`);
       const json = await res.json();
@@ -190,6 +242,69 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
     setSelected(prev => prev ? { ...prev, selectedStormId: stormId, drift: null, hourly: null, loading: true } : prev);
     fetchDrift(selected.locationId, stormId);
   }, [selected, fetchDrift]);
+
+  // ── Auto-focus from search/geolocation on the overview ─────────────────────
+  const didFocus = useRef(false);
+  useEffect(() => {
+    if (didFocus.current || !focusLat || !focusLon || projected.length === 0) return;
+    didFocus.current = true;
+    selectByLatLonRef.current?.(focusLat, focusLon);
+  }, [focusLat, focusLon, projected]);
+
+  // ── Search + geolocation ───────────────────────────────────────────────────
+
+  // Ref to projectedGrid so selectByLatLon (defined before projectedGrid) can access it.
+  const projectedGridRef = useRef<typeof projectedGrid>([]);
+
+  const selectByLatLon = useCallback((lat: number, lon: number) => {
+    const grid = projectedGridRef.current;
+    if (!grid.length) return;
+    const [clickX, clickY] = albersProject(lon, lat);
+    let best = grid[0];
+    let bestD = Infinity;
+    for (const p of grid) {
+      const d = (p.svgX - clickX) ** 2 + (p.svgY - clickY) ** 2;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    // Place the marker at the searched location, not the grid point.
+    if (best) fetchStorms(best, { svgX: clickX, svgY: clickY, lat, lon });
+    setQuery('');
+    setSearchResults([]);
+  }, [fetchStorms]);
+
+  const selectByLatLonRef = useRef(selectByLatLon);
+  selectByLatLonRef.current = selectByLatLon;
+
+  const handleSearch = useCallback((value: string) => {
+    setQuery(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (value.length < 3) { setSearchResults([]); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(
+          `https://api.maptiler.com/geocoding/${encodeURIComponent(value)}.json?key=${mapTilerKey}&country=us&limit=5`,
+        );
+        const json = await res.json();
+        setSearchResults(
+          (json.features ?? []).map((f: { place_name: string; center: [number, number] }) => ({
+            place_name: f.place_name,
+            center: f.center,
+          })),
+        );
+      } catch { setSearchResults([]); }
+      setSearching(false);
+    }, 300);
+  }, [mapTilerKey]);
+
+  const handleGeolocate = useCallback(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => selectByLatLon(pos.coords.latitude, pos.coords.longitude),
+      () => {},
+      { enableHighAccuracy: false, timeout: 8000 },
+    );
+  }, [selectByLatLon]);
 
   // ── Contour generation ────────────────────────────────────────────────────
 
@@ -284,45 +399,40 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
   const vb = `${detail.svgMinX} ${detail.svgMinY} ${detail.svgWidth} ${detail.svgHeight}`;
 
   // Find nearest grid point to a click for loading storm data.
-  const svgRef = useRef<SVGSVGElement>(null);
-  const lastClickTime = useRef(0);
+  // Project all grid points (for click targets). Build a snow lookup for quick matching.
+  const projectedGrid = useMemo(() => {
+    const snowMap = new Map(points.map(p => [`${p.lat},${p.lon}`, p]));
+    return gridPoints.map(g => {
+      const [x, y] = albersProject(g.lon, g.lat);
+      const snowPt = snowMap.get(`${g.lat},${g.lon}`);
+      return {
+        id: g.id, lat: g.lat, lon: g.lon, svgX: x, svgY: y,
+        snowIn: snowPt?.snowIn ?? 0,
+        locationId: snowPt?.locationId ?? g.id,
+        hasSnow: !!snowPt,
+      };
+    });
+  }, [gridPoints, points]);
 
-  const handleMapClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    // Debounce — ignore clicks within 300ms of each other.
-    const now = Date.now();
-    if (now - lastClickTime.current < 300) return;
-    lastClickTime.current = now;
+  // Keep the ref in sync.
+  projectedGridRef.current = projectedGrid;
 
-    const svg = svgRef.current;
-    if (!svg) return;
-
-    // Use SVG's built-in coordinate transform.
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return;
-    const inv = ctm.inverse();
-    const clickX = inv.a * e.clientX + inv.c * e.clientY + inv.e;
-    const clickY = inv.b * e.clientX + inv.d * e.clientY + inv.f;
-
-    // Find nearest projected point.
-    let best = projected[0];
-    let bestD = Infinity;
-    for (const p of projected) {
-      const d = (p.svgX - clickX) ** 2 + (p.svgY - clickY) ** 2;
-      if (d < bestD) { bestD = d; best = p; }
-    }
-    if (best) fetchStorms(best);
-  }, [projected, fetchStorms]);
+  // Hit radius based on grid spacing.
+  const hitRadius = useMemo(() => {
+    if (gridPoints.length < 2) return 5;
+    const [x1] = albersProject(gridPoints[0].lon, gridPoints[0].lat);
+    const [x2] = albersProject(gridPoints[0].lon + 0.25, gridPoints[0].lat);
+    return Math.max(2, Math.abs(x2 - x1) * 0.55);
+  }, [gridPoints]);
 
   return (
     <div className="flex h-full bg-white">
       {/* Map area */}
       <div className="flex-1 relative">
         <svg
-          ref={svgRef}
           viewBox={vb}
-          className="w-full h-full cursor-pointer"
+          className="w-full h-full"
           preserveAspectRatio="xMidYMid meet"
-          onClick={handleMapClick}
         >
           <defs>
             <filter id="state-shadow-detail" x="-3%" y="-2%" width="106%" height="108%">
@@ -332,6 +442,13 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
             <clipPath id="state-clip">
               <path d={detail.path} />
             </clipPath>
+            {/* Snowflake marker for selected snowy points */}
+            <symbol id="flake-marker" viewBox="0 -960 960 960">
+              <path
+                fill="#3a86ff"
+                d="M450-80v-95l-73 62-39-46 112-94v-175l-151 87-26 145-59-11 17-94-82 47-30-52 82-47-90-33 20-56 138 49 150-87-150-86-138 49-20-56 90-33-82-48 30-52 82 48-17-94 59-11 26 145 151 87v-175l-112-94 39-46 73 62v-96h60v96l72-62 39 46-111 94v175l150-87 26-145 59 11-17 94 82-47 30 53-82 46 90 33-20 56-138-49-150 86 150 87 138-49 20 56-90 33 83 47-30 52-83-47 17 94-59 11-26-145-150-87v175l111 94-39 46-72-62v95h-60Z"
+              />
+            </symbol>
           </defs>
 
           {/* State shape background */}
@@ -412,30 +529,128 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
           })()}
 
           {/* Selected point marker */}
-          {selected && (
-            <>
-              <circle
-                cx={selected.svgX}
-                cy={selected.svgY}
-                r={Math.min(detail.svgWidth, detail.svgHeight) * 0.015}
-                fill="#f76707"
-                stroke="#ffffff"
-                strokeWidth={1}
-              />
-              <text
-                x={selected.svgX}
-                y={selected.svgY - Math.min(detail.svgWidth, detail.svgHeight) * 0.022}
-                textAnchor="middle"
-                fontSize={Math.min(detail.svgWidth, detail.svgHeight) * 0.03}
-                fontWeight={800}
-                fill="#f76707"
-                style={{ pointerEvents: 'none', userSelect: 'none' }}
-              >
-                {(selected.bloopTotal ?? selected.snowIn).toFixed(1)}″
-              </text>
-            </>
-          )}
+          {selected && (() => {
+            const s = Math.min(detail.svgWidth, detail.svgHeight);
+            const hasSnow = selected.snowIn > 0;
+            const markerR = s * 0.015;
+            return (
+              <g style={{ pointerEvents: 'none' }}>
+                {hasSnow ? (
+                  <>
+                    {/* Snowflake marker for snowy points */}
+                    <use
+                      href="#flake-marker"
+                      x={selected.svgX - markerR}
+                      y={selected.svgY - markerR}
+                      width={markerR * 2}
+                      height={markerR * 2}
+                    />
+                    <text
+                      x={selected.svgX}
+                      y={selected.svgY - markerR - s * 0.005}
+                      textAnchor="middle"
+                      fontSize={s * 0.025}
+                      fontWeight={800}
+                      fill="#3a86ff"
+                    >
+                      {(selected.bloopTotal ?? selected.snowIn).toFixed(1)}″
+                    </text>
+                  </>
+                ) : (
+                  <>
+                    {/* Sun marker for no-snow points */}
+                    <circle
+                      cx={selected.svgX}
+                      cy={selected.svgY}
+                      r={markerR}
+                      fill="#f59f00"
+                      stroke="#ffffff"
+                      strokeWidth={0.8}
+                    />
+                    <text
+                      x={selected.svgX}
+                      y={selected.svgY - markerR - s * 0.005}
+                      textAnchor="middle"
+                      fontSize={s * 0.02}
+                      fontWeight={700}
+                      fill="#f59f00"
+                    >
+                      No snow
+                    </text>
+                  </>
+                )}
+              </g>
+            );
+          })()}
+
+          {/* Click targets — topmost layer so they catch all clicks */}
+          {/* Click targets for every grid point */}
+          {projectedGrid.map(gt => (
+            <circle
+              key={`hit-${gt.id}`}
+              cx={gt.svgX}
+              cy={gt.svgY}
+              r={hitRadius}
+              fill="transparent"
+              className="cursor-pointer"
+              onClick={() => {
+                // Place marker at the grid point but reverse geocode from the grid lat/lon.
+                fetchStorms(gt, { svgX: gt.svgX, svgY: gt.svgY, lat: gt.lat, lon: gt.lon });
+              }}
+            />
+          ))}
         </svg>
+
+        {/* Search bar */}
+        <div className="absolute top-4 left-4 w-64">
+          <div className="relative flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={query}
+                onChange={e => handleSearch(e.target.value)}
+                placeholder="Search a location…"
+                className="w-full bg-white/80 backdrop-blur-sm text-[#4a4539] placeholder-[#b0bcc8]
+                           rounded-full px-4 py-2 text-xs focus:outline-none focus:ring-2
+                           focus:ring-[#3a86ff]/30 border border-[#d0dcea] shadow-sm"
+              />
+              {searching && (
+                <span className="absolute right-3 top-2.5 text-[#b0bcc8] text-[10px] animate-pulse">…</span>
+              )}
+            </div>
+            <button
+              onClick={handleGeolocate}
+              title="Use my location"
+              className="flex-none w-9 h-9 flex items-center justify-center bg-white/80
+                         backdrop-blur-sm rounded-full border border-[#d0dcea] text-[#7eaed4]
+                         hover:bg-white hover:text-[#4a4539] transition-colors shadow-sm"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="4" />
+                <line x1="12" y1="2" x2="12" y2="6" />
+                <line x1="12" y1="18" x2="12" y2="22" />
+                <line x1="2" y1="12" x2="6" y2="12" />
+                <line x1="18" y1="12" x2="22" y2="12" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Search results dropdown */}
+          {searchResults.length > 0 && (
+            <div className="mt-1 bg-white/95 backdrop-blur-md rounded-xl border border-[#d0dcea] shadow-md overflow-hidden">
+              {searchResults.map((r, i) => (
+                <button
+                  key={i}
+                  onClick={() => selectByLatLon(r.center[1], r.center[0])}
+                  className="w-full text-left px-3 py-2 text-xs text-[#4a4539] hover:bg-[#e8f4ff]
+                             border-b border-[#e8f4ff] last:border-0 transition-colors"
+                >
+                  {r.place_name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Timestamp */}
         {fetchedAt && (
@@ -484,9 +699,13 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
               <span className="text-[10px] font-bold text-[#7eaed4]">{selected.confidence}%</span>
             </div>
           )}
-          <p className="text-[11px] text-[#7eaed4] mb-1">
-            {selected.lat.toFixed(2)}°N · {Math.abs(selected.lon).toFixed(2)}°W
-          </p>
+          {selected.placeName ? (
+            <p className="text-[13px] text-[#4a4539] font-bold mb-0.5">{selected.placeName}</p>
+          ) : (
+            <p className="text-[11px] text-[#7eaed4] mb-0.5">
+              {selected.lat.toFixed(2)}°N · {Math.abs(selected.lon).toFixed(2)}°W
+            </p>
+          )}
           <p className="text-[9px] text-[#a5d8ff] font-semibold uppercase tracking-wider mb-4">
             BloopCast
           </p>
@@ -587,107 +806,153 @@ export function StateDetail({ abbr, points, fetchedAt }: StateDetailProps) {
                     />
                   </BarChart>
                 ) : (
-                  <BarChart
-                    data={(selected.hourly ?? []).filter(h => {
-                      // Show entries that have data for the selected source
-                      const src = selected.hourlyView;
-                      return h[src] !== undefined || h[`${src}:est`] !== undefined || h[`${src}:pred`] !== undefined;
-                    })}
-                    margin={{ top: 4, right: 8, left: -16, bottom: 0 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" vertical={false} />
-                    <XAxis
-                      dataKey="t"
-                      tickFormatter={(iso: string) =>
-                        new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
-                      }
-                      tick={{ fontSize: 8, fill: '#7eaed4' }}
-                      minTickGap={30}
-                    />
-                    <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: '#fff', border: '1px solid #d0dcea',
-                        borderRadius: 12, fontSize: 11,
-                      }}
-                      labelFormatter={(iso: string) => fmtTick(iso)}
-                      formatter={(v: number, name: string) => [
-                        `${v.toFixed(2)}″`,
-                        SOURCE_LABEL[selected.hourlyView] ?? selected.hourlyView,
-                      ]}
-                    />
-                    {[`${selected.hourlyView}:est`, `${selected.hourlyView}:pred`, selected.hourlyView].map(key => (
-                      <Bar
-                        key={key}
-                        dataKey={key}
-                        fill={SOURCE_COLOR[selected.hourlyView] ?? '#3a86ff'}
-                        opacity={key.endsWith(':pred') ? 0.45 : 0.85}
-                        radius={[2, 2, 0, 0]}
-                      />
-                    ))}
-                  </BarChart>
+                  (() => {
+                    const src = selected.hourlyView;
+                    // Flatten hourly data into one bar per timestamp for this source.
+                    // Merge :est and :pred into a single value per hour.
+                    const srcData = (selected.hourly ?? [])
+                      .filter(h => h[src] !== undefined || h[`${src}:est`] !== undefined || h[`${src}:pred`] !== undefined)
+                      .map(h => ({
+                        t: h.t,
+                        snowIn: (h[`${src}:est`] ?? h[`${src}:pred`] ?? h[src] ?? 0) as number,
+                        kind: h.kind ?? (h[`${src}:est`] !== undefined ? 'estimated' : 'predicted'),
+                      }));
+
+                    return (
+                      <BarChart data={srcData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" vertical={false} />
+                        <XAxis
+                          dataKey="t"
+                          tickFormatter={(iso: string) =>
+                            new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
+                          }
+                          tick={{ fontSize: 8, fill: '#7eaed4' }}
+                          minTickGap={30}
+                        />
+                        <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: '#fff', border: '1px solid #d0dcea',
+                            borderRadius: 12, fontSize: 11,
+                          }}
+                          labelFormatter={(iso: string) => fmtTick(iso)}
+                          formatter={(v: number) => [
+                            `${v.toFixed(2)}″`,
+                            SOURCE_LABEL[src] ?? src,
+                          ]}
+                        />
+                        <Bar
+                          dataKey="snowIn"
+                          fill={SOURCE_COLOR[src] ?? '#3a86ff'}
+                          opacity={0.85}
+                          radius={[2, 2, 0, 0]}
+                        />
+                      </BarChart>
+                    );
+                  })()
                 )}
               </ResponsiveContainer>
             </div>
           )}
 
-          {/* Drift chart */}
+          {/* Drift chart — shares toggle with hourly */}
           {!selected.loading && selected.drift && selected.drift.length > 0 && (
             <div className="mt-3">
               <p className="text-[10px] text-[#7eaed4] mb-1 font-bold uppercase tracking-widest">
                 Forecast drift
               </p>
               <ResponsiveContainer width="100%" height={120}>
-                <LineChart
-                  data={(() => {
+                {selected.hourlyView === 'bloop' ? (
+                  // BloopCast drift: weighted average line + confidence band (min/max range).
+                  (() => {
                     const timeSet = new Set<string>();
                     for (const s of selected.drift!) for (const p of s.points) timeSet.add(p.fetchedAt);
                     const allTimes = Array.from(timeSet).sort();
-                    return allTimes.map(t => {
-                      const entry: Record<string, string | number> = { t };
+
+                    const SOURCE_W: Record<string, number> = { 'open-meteo': 1.0, 'ecmwf': 0.9, 'nws': 0.8 };
+
+                    const driftData = allTimes.map(t => {
+                      const vals: number[] = [];
+                      let wSum = 0, vSum = 0;
                       for (const s of selected.drift!) {
                         const pt = s.points.find(p => p.fetchedAt === t);
-                        if (pt) entry[s.source] = pt.snowIn;
+                        if (pt) {
+                          const w = SOURCE_W[s.source] ?? 0.5;
+                          wSum += w;
+                          vSum += pt.snowIn * w;
+                          vals.push(pt.snowIn);
+                        }
                       }
-                      return entry;
+                      const avg = wSum > 0 ? vSum / wSum : 0;
+                      const lo = vals.length > 0 ? Math.min(...vals) : avg;
+                      const hi = vals.length > 0 ? Math.max(...vals) : avg;
+                      return { t, bloop: Math.round(avg * 100) / 100, range: [lo, hi] as [number, number] };
                     });
-                  })()}
-                  margin={{ top: 4, right: 8, left: -16, bottom: 0 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" />
-                  <XAxis dataKey="t" tickFormatter={fmtTick} tick={{ fontSize: 9, fill: '#7eaed4' }} minTickGap={60} />
-                  <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff', border: '1px solid #d0dcea',
-                      borderRadius: 12, fontSize: 11,
-                    }}
-                    labelFormatter={fmtTick}
-                    formatter={(v: number, name: string) => [
-                      `${v.toFixed(1)}″`, SOURCE_LABEL[name] ?? name,
-                    ]}
-                  />
-                  {selected.drift.map(s => (
-                    <Line
-                      key={s.source}
-                      type="monotone"
-                      dataKey={s.source}
-                      stroke={SOURCE_COLOR[s.source] ?? '#3a86ff'}
-                      strokeWidth={2.5}
-                      dot={false}
-                      connectNulls
-                    />
-                  ))}
-                </LineChart>
+
+                    return (
+                      <ComposedChart data={driftData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" />
+                        <XAxis dataKey="t" tickFormatter={fmtTick} tick={{ fontSize: 9, fill: '#7eaed4' }} minTickGap={60} />
+                        <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: '#fff', border: '1px solid #d0dcea', borderRadius: 12, fontSize: 11 }}
+                          labelFormatter={fmtTick}
+                          formatter={(v: unknown, name: string) => {
+                            if (name === 'range') {
+                              const r = v as [number, number];
+                              return [`${r[0].toFixed(1)}–${r[1].toFixed(1)}″`, 'Model range'];
+                            }
+                            return [`${(v as number).toFixed(1)}″`, 'BloopCast'];
+                          }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="range"
+                          fill="#3a86ff"
+                          fillOpacity={0.12}
+                          stroke="none"
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="bloop"
+                          stroke="#3a86ff"
+                          strokeWidth={2.5}
+                          dot={false}
+                          connectNulls
+                        />
+                      </ComposedChart>
+                    );
+                  })()
+                ) : (
+                  // Individual source drift
+                  (() => {
+                    const src = selected.hourlyView;
+                    const s = selected.drift!.find(d => d.source === src);
+                    if (!s) return <LineChart data={[]} />;
+                    const srcData = s.points.map(p => ({ t: p.fetchedAt, snowIn: p.snowIn }));
+                    return (
+                      <LineChart data={srcData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e8f4ff" />
+                        <XAxis dataKey="t" tickFormatter={fmtTick} tick={{ fontSize: 9, fill: '#7eaed4' }} minTickGap={60} />
+                        <YAxis unit='″' tick={{ fontSize: 9, fill: '#7eaed4' }} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: '#fff', border: '1px solid #d0dcea', borderRadius: 12, fontSize: 11 }}
+                          labelFormatter={fmtTick}
+                          formatter={(v: number) => [`${v.toFixed(1)}″`, SOURCE_LABEL[src] ?? src]}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="snowIn"
+                          stroke={SOURCE_COLOR[src] ?? '#3a86ff'}
+                          strokeWidth={2.5}
+                          dot={false}
+                          connectNulls
+                        />
+                      </LineChart>
+                    );
+                  })()
+                )}
               </ResponsiveContainer>
-              <div className="flex gap-3 mt-1.5">
-                {selected.drift.map(s => (
-                  <div key={s.source} className="flex items-center gap-1.5">
-                    <span className="inline-block w-3 h-1 rounded-full" style={{ backgroundColor: SOURCE_COLOR[s.source] ?? '#3a86ff' }} />
-                    <span className="text-[10px] text-[#7eaed4]">{SOURCE_LABEL[s.source] ?? s.source}</span>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
         </div>
