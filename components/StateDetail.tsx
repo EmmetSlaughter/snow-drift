@@ -363,14 +363,16 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
 
   // ── Contour generation ────────────────────────────────────────────────────
 
-  const THRESHOLDS = [0.1, 1, 3, 6, 12, 24];
+  const THRESHOLDS = [0.1, 1, 3, 6, 12, 18, 24, 36];
   const COLORS = [
-    '#bde0fe', // 0.1 – 1″  (trace)
-    '#74b9ff', // 1 – 3″
-    '#3a86ff', // 3 – 6″
-    '#1e3a8a', // 6 – 12″
-    '#6741d9', // 12 – 24″
-    '#9c36b5', // 24″+
+    '#d4f0ff', // 0.1 – 1″  trace — pale ice blue
+    '#91d5f7', // 1 – 3″    light — sky blue
+    '#f0e068', // 3 – 6″    moderate — warm yellow
+    '#f5a623', // 6 – 12″   significant — orange
+    '#e8432a', // 12 – 18″  heavy — red
+    '#c41e6a', // 18 – 24″  very heavy — magenta
+    '#6b1fa0', // 24 – 36″  extreme — deep purple
+    '#2e1065', // 36″+      historic — near black purple
   ];
 
   const contourPaths = useMemo(() => {
@@ -480,6 +482,7 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
             <clipPath id="state-clip">
               <path d={detail.path} />
             </clipPath>
+
             {/* Snowflake marker for selected snowy points — white with dark outline for contrast */}
             <symbol id="flake-marker" viewBox="0 -960 960 960">
               <path
@@ -496,12 +499,13 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
           {/* State shape background */}
           <path
             d={detail.path}
-            fill="#ffffff"
-            stroke="#d0dcea"
-            strokeWidth={0.5}
+            fill="#f8f9fb"
+            stroke="rgba(60,70,80,0.15)"
+            strokeWidth={0.4}
             strokeLinejoin="round"
             filter="url(#state-shadow-detail)"
           />
+
 
           {/* Contour bands — clipped to state */}
           <g clipPath="url(#state-clip)">
@@ -510,7 +514,7 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
                 key={i}
                 d={band.d}
                 fill={band.color}
-                fillOpacity={0.8}
+                fillOpacity={0.85}
                 stroke="none"
               />
             ))}
@@ -520,10 +524,11 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
           <path
             d={detail.path}
             fill="none"
-            stroke="#d0dcea"
-            strokeWidth={0.5}
+            stroke="rgba(60,70,80,0.2)"
+            strokeWidth={0.4}
             strokeLinejoin="round"
           />
+
 
           {/* City labels — outside clipPath so text isn't cut off at borders */}
           {(() => {
