@@ -384,8 +384,8 @@ export function StateDetail({ abbr, points, gridPoints, fetchedAt, focusLat, foc
     const w = detail.svgWidth + pad * 2;
     const h = detail.svgHeight + pad * 2;
 
-    const cols = Math.min(60, Math.round(w / 3));
-    const rows = Math.min(60, Math.round(h / 3));
+    const cols = Math.min(100, Math.round(w / 2));
+    const rows = Math.min(100, Math.round(h / 2));
     const cellW = w / cols;
     const cellH = h / rows;
 
